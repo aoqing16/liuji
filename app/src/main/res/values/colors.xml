@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 与 Compose PageBackground (0xFFF3F4F7) 一致，减少启动 Overdraw / 白闪 -->
+    <color name="page_background">#F3F4F7</color>
+</resources>

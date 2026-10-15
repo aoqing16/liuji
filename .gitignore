@@ -1,0 +1,27 @@
+*.iml
+.gradle/
+.idea/
+.kotlin/
+.cursor/
+.DS_Store
+/build
+/app/build
+/baselineprofile/build
+/captures
+.externalNativeBuild
+.cxx
+
+# 本地 SDK / 签名（勿上传）
+local.properties
+keystore.properties
+*.jks
+*.keystore
+signing/
+dist/
+
+# 非编译交付物（本地保留，不进公开仓库）
+/autojs/
+/measure-out/
+/docs/
+/scripts/
+/tools/

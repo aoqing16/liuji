@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Fallback vector if mipmap foreground missing; primary adaptive FG is mipmap. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- trail nodes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,30m-4.5,0a4.5,4.5 0,1 1,9 0a4.5,4.5 0,1 1,-9 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M46,38m-5.5,0a5.5,5.5 0,1 1,11 0a5.5,5.5 0,1 1,-11 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M56,50m-3.5,0a3.5,3.5 0,1 1,7 0a3.5,3.5 0,1 1,-7 0" />
+    <!-- dashed trail approximated as short segments -->
+    <path
+        android:pathData="M38,33 L42,36"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M50,42 L53,46"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <path
+        android:pathData="M58,53 L61,58"
+        android:strokeWidth="2.2"
+        android:strokeColor="#FFFFFF"
+        android:strokeLineCap="round" />
+    <!-- footprint sole -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M58,62 C54,66 52,74 54,80 C56,86 64,90 70,86 C76,82 78,72 74,66 C70,60 62,58 58,62 Z" />
+    <!-- toes -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M76,60m-3.2,0a3.2,3.2 0,1 1,6.4 0a3.2,3.2 0,1 1,-6.4 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M80,66m-2.8,0a2.8,2.8 0,1 1,5.6 0a2.8,2.8 0,1 1,-5.6 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M81,72.5m-2.4,0a2.4,2.4 0,1 1,4.8 0a2.4,2.4 0,1 1,-4.8 0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M79,78m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+</vector>

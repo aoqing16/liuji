@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "comment": "Android 包名完全匹配（lowercase）。与 AppCategorizer 启发式互补。",
+  "rules": [
+    {
+      "category": "social",
+      "packageNames": [
+        "com.tencent.mm",
+        "com.tencent.mobileqq",
+        "com.ss.android.ugc.aweme",
+        "com.ss.android.ugc.aweme.lite",
+        "com.smile.gifmaker",
+        "com.kuaishou.nebula",
+        "com.sina.weibo",
+        "com.zhihu.android",
+        "com.xingin.xhs",
+        "com.instagram.android",
+        "com.whatsapp",
+        "org.telegram.messenger",
+        "com.twitter.android",
+        "com.facebook.katana",
+        "com.snapchat.android",
+        "com.discord",
+        "jp.naver.line.android",
+        "com.kakao.talk",
+        "com.ss.android.ugc.live",
+        "com.douban.frodo",
+        "com.baidu.tieba",
+        "com.immomo.momo"
+      ]
+    },
+    {
+      "category": "browse",
+      "packageNames": [
+        "com.android.chrome",
+        "com.chrome.beta",
+        "com.chrome.dev",
+        "com.google.android.apps.chrome",
+        "org.mozilla.firefox",
+        "com.opera.browser",
+        "com.opera.mini.native",
+        "com.microsoft.emmx",
+        "com.UCMobile",
+        "com.quark.browser",
+        "com.baidu.browser.apps",
+        "com.huawei.browser",
+        "com.heytap.browser",
+        "com.vivo.browser",
+        "com.mi.globalbrowser",
+        "com.sec.android.app.sbrowser",
+        "com.android.browser"
+      ]
+    },
+    {
+      "category": "video",
+      "packageNames": [
+        "tv.danmaku.bili",
+        "com.bilibili.app.in",
+        "com.qiyi.video",
+        "com.youku.phone",
+        "com.tencent.qqlive",
+        "com.tencent.weishi",
+        "com.ss.android.article.video",
+        "com.ss.android.ugc.aweme",
+        "com.netflix.mediaclient",
+        "com.google.android.youtube",
+        "com.spotify.music",
+        "com.netease.cloudmusic",
+        "com.kugou.android",
+        "com.kuwo.player",
+        "com.tencent.qqmusic",
+        "com.ximalaya.ting.android",
+        "com.ss.android.article.news",
+        "com.dragon.read",
+        "com.cmcc.cmvideo",
+        "com.hunantv.imgo.activity",
+        "com.sohu.sohuvideo",
+        "com.lemon.lv",
+        "com.ss.android.ugc.trill"
+      ]
+    },
+    {
+      "category": "game",
+      "packageNames": [
+        "com.miHoYo.Yuanshen",
+        "com.miHoYo.GenshinImpact",
+        "com.miHoYo.hkrpg",
+        "com.miHoYo.Nap",
+        "com.hypergryph.arknights",
+        "com.tencent.tmgp.sgame",
+        "com.tencent.tmgp.pubgmhd",
+        "com.netease.party",
+        "com.netease.mc",
+        "com.mojang.minecraftpe",
+        "com.roblox.client",
+        "com.supercell.clashofclans",
+        "com.supercell.brawlstars",
+        "com.activision.callofduty.shooter",
+        "com.garena.game.codm"
+      ]
+    },
+    {
+      "category": "work",
+      "packageNames": [
+        "com.microsoft.office.word",
+        "com.microsoft.office.excel",
+        "com.microsoft.office.powerpoint",
+        "com.microsoft.office.officehubrow",
+        "cn.wps.moffice_eng",
+        "com.google.android.apps.docs",
+        "notion.id",
+        "com.yinxiang",
+        "com.yuque.mobile.android.app",
+        "com.tencent.docs",
+        "com.adobe.reader",
+        "com.foxit.mobile.pdf.lite"
+      ]
+    },
+    {
+      "category": "comm",
+      "packageNames": [
+        "com.tencent.wework",
+        "com.alibaba.android.rimet",
+        "com.ss.android.lark",
+        "com.ss.android.lark.kami",
+        "com.slack",
+        "com.microsoft.teams",
+        "us.zoom.videomeetings",
+        "com.google.android.gm",
+        "com.android.email",
+        "com.netease.mobimail",
+        "com.tencent.androidqqmail",
+        "com.microsoft.office.outlook"
+      ]
+    },
+    {
+      "category": "shop",
+      "packageNames": [
+        "com.taobao.taobao",
+        "com.tmall.wireless",
+        "com.jingdong.app.mall",
+        "com.xunmeng.pinduoduo",
+        "com.suning.mobile.ebuy",
+        "com.taobao.idlefish",
+        "com.sankuai.meituan",
+        "me.ele",
+        "com.dianping.v1",
+        "com.amazon.mShop.android.shopping",
+        "com.ebay.mobile",
+        "com.alibaba.aliexpresshd"
+      ]
+    },
+    {
+      "category": "tool",
+      "packageNames": [
+        "com.autonavi.minimap",
+        "com.baidu.BaiduMap",
+        "com.google.android.apps.maps",
+        "com.tencent.map",
+        "com.miui.weather2",
+        "com.google.android.deskclock",
+        "com.android.deskclock",
+        "com.google.android.calendar",
+        "com.android.calendar",
+        "com.google.android.apps.photos",
+        "com.miui.gallery",
+        "com.android.camera",
+        "com.google.android.apps.translate",
+        "com.baidu.input",
+        "com.sohu.inputmethod.sogou",
+        "com.iflytek.inputmethod",
+        "com.google.android.apps.nbu.files",
+        "com.android.fileexplorer",
+        "com.miui.calculator",
+        "com.google.android.calculator"
+      ]
+    },
+    {
+      "category": "system",
+      "packageNames": [
+        "com.android.settings",
+        "com.android.systemui",
+        "com.google.android.gms",
+        "com.google.android.gsf",
+        "com.android.vending",
+        "com.miui.home",
+        "com.huawei.android.launcher",
+        "com.sec.android.app.launcher",
+        "com.oppo.launcher",
+        "com.bbk.launcher2",
+        "com.google.android.apps.nexuslauncher",
+        "com.android.packageinstaller",
+        "com.google.android.permissioncontroller",
+        "com.android.providers.downloads.ui"
+      ]
+    }
+  ]
+}

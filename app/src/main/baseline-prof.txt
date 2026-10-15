@@ -1,0 +1,16 @@
+# Seed Baseline Profile for hot UI paths (Perfetto JIT: Categories / Dashboard / Main).
+# Regenerate with: ./gradlew :app:generateBaselineProfile
+# Class rules must not carry method flags (HSP); see ART profile format.
+Lcom/liuji/xiaoqi/MainActivity;
+Lcom/liuji/xiaoqi/MainActivity$*;
+Lcom/liuji/xiaoqi/ui/PhoneHomeScaffoldKt;
+Lcom/liuji/xiaoqi/ui/UsageViewModel;
+Lcom/liuji/xiaoqi/ui/UsageViewModel$*;
+Lcom/liuji/xiaoqi/ui/categories/CategoriesScreenKt;
+Lcom/liuji/xiaoqi/ui/dashboard/DashboardScreenKt;
+Lcom/liuji/xiaoqi/ui/components/RankedListsKt;
+Lcom/liuji/xiaoqi/ui/components/TimelineListKt;
+Lcom/liuji/xiaoqi/ui/components/HourlyChartKt;
+Lcom/liuji/xiaoqi/ui/components/PeriodBarChartKt;
+Lcom/liuji/xiaoqi/data/UsageRepository;
+Lcom/liuji/xiaoqi/data/CategoryRepository;

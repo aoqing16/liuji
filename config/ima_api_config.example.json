@@ -1,0 +1,6 @@
+{
+  "clientId": "在 ima 开放平台获取，勿提交真实值",
+  "apiKey": "在 ima 开放平台获取，勿提交真实值",
+  "knowledgeBaseName": "你的知识库名称",
+  "comment": "App 内「云同步 / ima」相关凭据由用户在设置里填写；本文件仅作字段参考。勿把真实密钥提交到 Git。"
+}

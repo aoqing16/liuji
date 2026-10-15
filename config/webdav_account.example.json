@@ -1,0 +1,7 @@
+{
+  "url": "https://dav.jianguoyun.com/dav/",
+  "user": "你的坚果云账号邮箱",
+  "password": "坚果云应用密码（不是登录密码），勿提交真实值",
+  "rootPath": "hindsight",
+  "comment": "App 内「电脑看板 / WebDAV」凭据在设置里填写；本文件仅作字段参考。"
+}

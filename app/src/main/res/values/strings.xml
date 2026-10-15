@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">留迹</string>
+    <string name="accessibility_service_description">用于「画面记录」：读取当前前台界面的可见文字与位置；在「有操作时」档位下，于点击或滚动等操作后采集。数据仅保存在本地。</string>
+    <string name="settings">设置</string>
+</resources>

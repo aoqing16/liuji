@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "comment": "画面记录内置黑名单：包名前缀/精确包名 + Activity/进程特征。不包含 systemui。",
+  "packageExact": [
+    "com.tencent.tmgp.sgame",
+    "com.tencent.tmgp.pubgmhd",
+    "com.miHoYo.Yuanshen",
+    "com.miHoYo.GenshinImpact",
+    "com.miHoYo.Nap",
+    "com.netease.hyxd.nearme.gamecenter",
+    "com.netease.dwrg",
+    "com.kurogame.mingchao"
+  ],
+  "packagePrefixes": [
+    "com.tencent.tmgp.",
+    "com.mihoyo.",
+    "com.netease.game",
+    "com.netease.party",
+    "com.hypergryph.",
+    "com.kurogame.",
+    "com.unity3d.",
+    "com.epicgames.",
+    "com.roblox.",
+    "com.mojang."
+  ],
+  "activityTokens": [
+    "UnityPlayerActivity",
+    "UnityPlayerGameActivity",
+    "Cocos2dxActivity",
+    "Cocos2dx",
+    "UE4Game",
+    "UnrealEngine",
+    "GodotApp",
+    "Godot",
+    "IL2CPP"
+  ]
+}
