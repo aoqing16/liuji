@@ -99,6 +99,11 @@ Windows 使用 `gradlew.bat`。
 
 本项目衍生自 [Hindsight](https://github.com/Tomotsugu-dev/Hindsight)（Copyright (c) 2026 Tomotsugu，MIT）。请一并遵守其许可证条款。
 
+## 贡献者
+
+- [aoqing16](https://github.com/aoqing16) — 作者与维护者
+- Auto（Cursor / Composer）— 协助开源整理、文档与发布流程
+
 ## 贡献
 
 当前仓库仅公开源码与安装包，**暂不接受 Issue / Pull Request 合入**。你可以自行 fork 修改；再分发时请保留 MIT 许可证与版权声明。
