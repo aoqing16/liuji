@@ -35,13 +35,13 @@ object RuntimeLogExporter {
         return RuntimeLogExportResult(file = file, uri = uri, fileName = fileName)
     }
 
-    fun shareIntent(result: RuntimeLogExportResult): Intent {
+    fun shareIntent(context: Context, result: RuntimeLogExportResult): Intent {
         return Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_STREAM, result.uri)
             putExtra(Intent.EXTRA_SUBJECT, result.fileName)
             // 不附带 EXTRA_TEXT，避免文件管理器「另存为」只保存说明字符串
-            clipData = ClipData.newUri(null, result.fileName, result.uri)
+            clipData = ClipData.newUri(context.contentResolver, result.fileName, result.uri)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
     }

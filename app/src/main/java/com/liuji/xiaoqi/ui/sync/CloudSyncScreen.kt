@@ -12,12 +12,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -38,7 +37,6 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.liuji.xiaoqi.ima.ImaSyncInterval
 import com.liuji.xiaoqi.ui.theme.Space
 import com.liuji.xiaoqi.ui.theme.Stroke
 import com.liuji.xiaoqi.ui.theme.TextMuted
@@ -66,12 +64,14 @@ fun CloudSyncScreen(
             verticalArrangement = Arrangement.spacedBy(Space.md),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Outlined.CloudSync, contentDescription = null)
+                Icon(Icons.Outlined.Chat, contentDescription = null)
                 Spacer(Modifier.padding(Space.xs))
-                Text("云同步", style = MaterialTheme.typography.titleLarge, color = TextStrong)
+                Text("AI对话", style = MaterialTheme.typography.titleLarge, color = TextStrong)
             }
             Text(
-                "把本机使用时长与画面记录备份到腾讯 ima 知识库。每天一篇笔记，有新内容会自动追加。内容较多时可能需要多点几次「立即同步」。",
+                "把已统计完成日期的使用数据上传到腾讯 ima 知识库，便于在 ima 里与 AI 对话分析习惯、查找内容。" +
+                    "填写知识库名称：已存在则写入，不存在则自动创建。" +
+                    "今日进行中的数据不会上传；开启自动同步后，在自然日结束后上传已完成日（约凌晨执行，打开 App 也会补传）。",
                 color = TextMuted,
                 style = MaterialTheme.typography.bodyMedium,
             )
@@ -110,7 +110,7 @@ fun CloudSyncScreen(
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("知识库名称") },
                 singleLine = true,
-                supportingText = { Text("请与 ima 里已有知识库名称完全一致") },
+                supportingText = { Text("已存在则写入；不存在则自动创建") },
             )
 
             Row(
@@ -121,7 +121,7 @@ fun CloudSyncScreen(
                 Column(Modifier.weight(1f)) {
                     Text("自动同步", color = TextStrong)
                     Text(
-                        "需要联网；系统可能稍后再执行",
+                        "自然日结束后上传已完成日（约凌晨执行；打开 App 也会补传）",
                         color = TextMuted,
                         style = MaterialTheme.typography.bodySmall,
                     )
@@ -130,20 +130,6 @@ fun CloudSyncScreen(
                     checked = state.autoEnabled,
                     onCheckedChange = viewModel::setAutoEnabled,
                 )
-            }
-
-            Text("同步间隔", color = TextStrong)
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(Space.sm),
-            ) {
-                ImaSyncInterval.entries.forEach { opt ->
-                    FilterChip(
-                        selected = state.interval == opt,
-                        onClick = { viewModel.setInterval(opt) },
-                        label = { Text(opt.label) },
-                    )
-                }
             }
 
             Row(

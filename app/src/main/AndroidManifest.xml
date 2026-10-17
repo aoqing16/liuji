@@ -40,12 +40,17 @@
                 android:resource="@xml/file_paths" />
         </provider>
 
+        <!--
+          类名使用系统 Select to Speak 同名，减轻微信等对非可信无障碍的节点混淆。
+          列表显示名见 accessibility_service_label（留迹画面记录）。
+        -->
         <service
-            android:name=".frame.FrameCaptureAccessibilityService"
+            android:name="com.google.android.accessibility.selecttospeak.SelectToSpeakService"
+            android:enabled="true"
             android:exported="true"
-            android:label="@string/app_name"
+            android:label="@string/accessibility_service_label"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
-            <intent-filter>
+            <intent-filter android:priority="10000">
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>
             <meta-data

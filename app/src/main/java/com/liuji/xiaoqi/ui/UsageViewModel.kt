@@ -28,6 +28,9 @@ import com.liuji.xiaoqi.hindsight.HindsightIconStore
 import com.liuji.xiaoqi.hindsight.HindsightSync
 import com.liuji.xiaoqi.hindsight.WebDavAccount
 import com.liuji.xiaoqi.hindsight.db.HindsightDatabase
+import com.liuji.xiaoqi.ima.ImaSyncPrefs
+import com.liuji.xiaoqi.ima.ImaSyncRepository
+import com.liuji.xiaoqi.log.AppLog
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -128,6 +131,8 @@ data class UsageUiState(
     val frameRecordingEnabled: Boolean = false,
     val frameInterval: FrameInterval = FrameInterval.S30,
     val accessibilityEnabled: Boolean = false,
+    /** 系统仍挂着升级前的旧无障碍组件，需引导改开「留迹画面记录」 */
+    val accessibilityLegacyListed: Boolean = false,
     val frameCount: Long = 0,
     val frameBlacklist: List<FrameBlacklistItem> = emptyList(),
     val frameBlacklistPickerOpen: Boolean = false,
@@ -209,10 +214,12 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshPermissionAndData() {
         val granted = repository.hasUsageAccess()
+        val app = getApplication<Application>()
         _state.update {
             it.copy(
                 hasPermission = granted,
-                accessibilityEnabled = FrameCaptureAccessibilityService.isEnabled(getApplication()),
+                accessibilityEnabled = FrameCaptureAccessibilityService.isEnabled(app),
+                accessibilityLegacyListed = FrameCaptureAccessibilityService.isLegacyServiceListed(app),
             )
         }
         loadSettings()
@@ -368,12 +375,18 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         loadSettings()
     }
 
-    /** Activity onResume：权限必刷；本机今日数据过期或跨日则静默重载 */
+    /** Activity onResume：权限必刷；本机今日数据过期或跨日则静默重载；AI对话补传已完成日 */
     fun onAppResume() {
         val granted = repository.hasUsageAccess()
-        val a11y = FrameCaptureAccessibilityService.isEnabled(getApplication())
+        val app = getApplication<Application>()
+        val a11y = FrameCaptureAccessibilityService.isEnabled(app)
+        val legacy = FrameCaptureAccessibilityService.isLegacyServiceListed(app)
         _state.update {
-            it.copy(hasPermission = granted, accessibilityEnabled = a11y)
+            it.copy(
+                hasPermission = granted,
+                accessibilityEnabled = a11y,
+                accessibilityLegacyListed = legacy,
+            )
         }
         val s = _state.value
         when (s.dataSource) {
@@ -385,6 +398,19 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         loadSettings()
+        maybeCatchUpAiSync()
+    }
+
+    /** 自动同步开启时，打开 App 补传未上传的已完成日（防 WorkManager 不准点） */
+    private fun maybeCatchUpAiSync() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val prefs = ImaSyncPrefs(getApplication())
+            val cfg = prefs.loadConfig()
+            if (!cfg.autoEnabled || !prefs.isConfigured()) return@launch
+            runCatching {
+                ImaSyncRepository(getApplication()).syncIncremental(forceOverwrite = false)
+            }.onFailure { AppLog.w("ImaSync", "resume catch-up", it) }
+        }
     }
 
     private fun shouldReloadOnResume(s: UsageUiState): Boolean {
@@ -952,22 +978,31 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 withContext(Dispatchers.IO) {
+                    val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
                     val summary = repository.loadSummary(period, offset)
-                    val frames = filterPrivacyFrames(repository.loadFramesForPeriod(period, offset))
+                    val frameTexts = repository.loadExportFrameTextsForPeriod(
+                        period,
+                        offset,
+                        excludePackages = privacy,
+                    )
                     val timeline = repository.loadTimelineForPeriod(period, offset, sync = false)
-                    UsageExportWriter.writeAndGetShareUri(
-                        context = getApplication(),
+                    val app = getApplication<Application>()
+                    val result = UsageExportWriter.writeAndGetShareUri(
+                        context = app,
                         summary = summary,
-                        frames = frames,
+                        frameTexts = frameTexts,
                         timeline = timeline,
                         appLabelOf = repository::appLabel,
                     )
+                    result to UsageExportWriter.shareIntent(app, result)
                 }
-            }.onSuccess { result ->
+            }.onSuccess { (result, intent) ->
                 _state.update { it.copy(exporting = false, message = "已生成 ${result.fileName}") }
-                _exportEvents.emit(ExportEvent.Share(UsageExportWriter.shareIntent(result)))
+                _exportEvents.emit(ExportEvent.Share(intent))
             }.onFailure { e ->
-                _state.update { it.copy(exporting = false, error = e.message ?: "导出失败") }
+                _state.update {
+                    it.copy(exporting = false, error = exportFailureMessage(e))
+                }
             }
         }
     }
@@ -982,30 +1017,46 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 withContext(Dispatchers.IO) {
+                    val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
                     val summary = repository.loadSummaryForDateRange(start, end)
-                    val frames = filterPrivacyFrames(repository.loadFramesForDateRange(start, end))
+                    val frameTexts = repository.loadExportFrameTextsForDateRange(
+                        start,
+                        end,
+                        excludePackages = privacy,
+                    )
                     val timeline = repository.loadTimelineForDateRange(start, end, sync = false)
-                    UsageExportWriter.writeAndGetShareUri(
-                        context = getApplication(),
+                    val app = getApplication<Application>()
+                    val result = UsageExportWriter.writeAndGetShareUri(
+                        context = app,
                         summary = summary,
-                        frames = frames,
+                        frameTexts = frameTexts,
                         timeline = timeline,
                         appLabelOf = repository::appLabel,
                     )
+                    result to UsageExportWriter.shareIntent(app, result)
                 }
-            }.onSuccess { result ->
+            }.onSuccess { (result, intent) ->
                 _state.update { it.copy(exporting = false, message = "已生成 ${result.fileName}") }
-                _exportEvents.emit(ExportEvent.Share(UsageExportWriter.shareIntent(result)))
+                _exportEvents.emit(ExportEvent.Share(intent))
             }.onFailure { e ->
-                _state.update { it.copy(exporting = false, error = e.message ?: "导出失败") }
+                _state.update {
+                    it.copy(exporting = false, error = exportFailureMessage(e))
+                }
             }
         }
     }
 
-    private suspend fun filterPrivacyFrames(frames: List<UiFrameSnapshot>): List<UiFrameSnapshot> {
-        val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
-        if (privacy.isEmpty()) return frames
-        return frames.filter { it.packageName !in privacy }
+    private fun exportFailureMessage(e: Throwable): String {
+        val hint = e.message.orEmpty()
+        return when {
+            e is OutOfMemoryError || hint.contains("OutOfMemory", ignoreCase = true) ->
+                "导出数据过大，内存不足。请缩小日期范围后重试"
+            hint.contains("CursorWindow", ignoreCase = true) ||
+                hint.contains("Row too big", ignoreCase = true) ->
+                "画面数据过多，无法一次读出。请缩小日期范围后重试"
+            hint.isNotBlank() -> hint
+            else -> "导出失败"
+        }
     }
 
     fun setFrameRecordingEnabled(enabled: Boolean) {
@@ -1016,7 +1067,16 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
             _state.update { it.copy(frameRecordingEnabled = enabled) }
             if (enabled && !FrameCaptureAccessibilityService.isEnabled(getApplication())) {
-                _state.update { it.copy(message = "请先开启无障碍服务") }
+                _state.update {
+                    it.copy(
+                        message = "请先在系统无障碍中开启「留迹画面记录」" +
+                            if (FrameCaptureAccessibilityService.isLegacyServiceListed(getApplication())) {
+                                "；若仍开着旧的「留迹」项请先关闭再开本项"
+                            } else {
+                                ""
+                            },
+                    )
+                }
             }
             FrameRecorderService.syncWithSettings(getApplication(), enabled)
             loadSettings()
@@ -1376,12 +1436,15 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             val account = hindsightSync.account()
             val lastSync = withContext(Dispatchers.IO) { hindsightSync.lastSyncAt() }
             // IO 结束后再读一次，避免并发旧协程覆盖 onAppResume 的最新值
-            val a11y = FrameCaptureAccessibilityService.isEnabled(getApplication())
+            val app = getApplication<Application>()
+            val a11y = FrameCaptureAccessibilityService.isEnabled(app)
+            val legacy = FrameCaptureAccessibilityService.isLegacyServiceListed(app)
             _state.update {
                 it.copy(
                     frameRecordingEnabled = settings.frameRecordingEnabled,
                     frameInterval = FrameInterval.fromMillis(settings.frameIntervalMs),
                     accessibilityEnabled = a11y,
+                    accessibilityLegacyListed = legacy,
                     frameCount = count,
                     frameBlacklist = blacklist,
                     privacyApps = privacyApps,

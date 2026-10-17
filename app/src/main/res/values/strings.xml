@@ -1,5 +1,6 @@
 <resources>
     <string name="app_name">留迹</string>
-    <string name="accessibility_service_description">用于「画面记录」：读取当前前台界面的可见文字与位置；在「有操作时」档位下，于点击或滚动等操作后采集。数据仅保存在本地。</string>
+    <string name="accessibility_service_label">留迹画面记录</string>
+    <string name="accessibility_service_description">留迹「画面记录」：读取当前前台界面的可见文字与位置（含微信等对普通无障碍混淆的应用）。在「有操作时」档位下，于点击或滚动后采集。数据仅保存在本机。\n\n请在系统无障碍列表中开启「留迹画面记录」。若仍看到旧的「留迹」无障碍项，请先关闭该项，再开启本项。</string>
     <string name="settings">设置</string>
 </resources>

@@ -16,17 +16,19 @@ class ImaSyncWorker(
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         RuntimeLogStore.init(applicationContext)
         val prefs = ImaSyncPrefs(applicationContext)
-        if (!prefs.isConfigured() || !prefs.loadConfig().autoEnabled) {
-            return@withContext Result.success()
-        }
-        return@withContext try {
-            val report = ImaSyncRepository(applicationContext).syncIncremental()
-            if (report.ok) Result.success() else Result.retry()
+        try {
+            if (prefs.isConfigured() && prefs.loadConfig().autoEnabled) {
+                val report = ImaSyncRepository(applicationContext).syncIncremental(forceOverwrite = false)
+                AppLog.i(TAG, "daily sync: ${report.message}")
+            }
         } catch (e: Exception) {
             AppLog.w(TAG, "auto sync failed", e)
             prefs.setLastError(e.message ?: e.toString())
-            Result.retry()
+        } finally {
+            // 无论成败都预约下一天，避免链条中断
+            ImaSyncScheduler.enqueueNextDaily(applicationContext)
         }
+        Result.success()
     }
 
     companion object {

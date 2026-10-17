@@ -4,7 +4,6 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.liuji.xiaoqi.ima.ImaApiClient
-import com.liuji.xiaoqi.ima.ImaSyncInterval
 import com.liuji.xiaoqi.ima.ImaSyncPrefs
 import com.liuji.xiaoqi.ima.ImaSyncRepository
 import com.liuji.xiaoqi.ima.ImaSyncScheduler
@@ -24,7 +23,6 @@ data class CloudSyncUiState(
     val apiKey: String = "",
     val knowledgeBaseName: String = "",
     val autoEnabled: Boolean = false,
-    val interval: ImaSyncInterval = ImaSyncInterval.H1,
     val showApiKey: Boolean = false,
     val saving: Boolean = false,
     val syncing: Boolean = false,
@@ -57,7 +55,6 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
                 apiKey = c.apiKey,
                 knowledgeBaseName = c.knowledgeBaseName,
                 autoEnabled = c.autoEnabled,
-                interval = c.interval,
                 lastSuccessText = formatStamp(c.lastSuccessAt, c.lastMessage),
                 lastErrorText = formatStamp(c.lastErrorAt, c.lastError),
                 statusLine = when {
@@ -75,7 +72,6 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
     fun setKbName(v: String) = _state.update { it.copy(knowledgeBaseName = v) }
     fun setShowApiKey(show: Boolean) = _state.update { it.copy(showApiKey = show) }
     fun setAutoEnabled(v: Boolean) = _state.update { it.copy(autoEnabled = v) }
-    fun setInterval(v: ImaSyncInterval) = _state.update { it.copy(interval = v) }
     fun consumeMessage() = _state.update { it.copy(snackMessage = null) }
 
     fun saveConfig() {
@@ -85,7 +81,7 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
             withContext(Dispatchers.IO) {
                 val oldName = prefs.loadConfig().knowledgeBaseName
                 prefs.saveCredentials(s.clientId, s.apiKey, s.knowledgeBaseName)
-                prefs.saveAuto(s.autoEnabled, s.interval)
+                prefs.saveAuto(s.autoEnabled)
                 if (oldName != s.knowledgeBaseName.trim()) {
                     prefs.setKnowledgeBaseId("")
                 }
@@ -104,21 +100,20 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
             _state.update { it.copy(snackMessage = "请先填写应用 ID 与访问密钥") }
             return
         }
+        if (s.knowledgeBaseName.isBlank()) {
+            _state.update { it.copy(snackMessage = "请先填写知识库名称") }
+            return
+        }
         viewModelScope.launch {
             _state.update { it.copy(testing = true) }
             val result = withContext(Dispatchers.IO) {
                 val client = ImaApiClient(s.clientId.trim(), s.apiKey)
-                if (s.knowledgeBaseName.isNotBlank()) {
-                    val (res, id) = client.resolveKnowledgeBaseId(s.knowledgeBaseName.trim())
-                    if (res.ok && id != null) {
-                        prefs.setKnowledgeBaseId(id)
-                        "连接成功，已找到知识库"
-                    } else {
-                        res.error ?: res.errmsg ?: "连接失败"
-                    }
+                val (res, id) = client.ensureKnowledgeBase(s.knowledgeBaseName.trim())
+                if (res.ok && !id.isNullOrBlank()) {
+                    prefs.setKnowledgeBaseId(id)
+                    "连接成功，知识库已就绪"
                 } else {
-                    val (res, list) = client.listAddableKnowledgeBases()
-                    if (res.ok) "连接成功，可用知识库 ${list.size} 个" else (res.error ?: "连接失败")
+                    res.error ?: res.errmsg ?: "连接失败"
                 }
             }
             _state.update {
@@ -142,14 +137,16 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
             return
         }
         viewModelScope.launch {
-            // 先落盘当前表单，避免未保存就同步
             val s = _state.value
             withContext(Dispatchers.IO) {
                 prefs.saveCredentials(s.clientId, s.apiKey, s.knowledgeBaseName)
-                prefs.saveAuto(s.autoEnabled, s.interval)
+                prefs.saveAuto(s.autoEnabled)
             }
             _state.update { it.copy(syncing = true, statusLine = "同步中…") }
-            val report = withContext(Dispatchers.IO) { repo.syncIncremental() }
+            // 立即同步：已同步日也覆盖上传
+            val report = withContext(Dispatchers.IO) {
+                repo.syncIncremental(forceOverwrite = true)
+            }
             _state.update {
                 it.copy(
                     syncing = false,

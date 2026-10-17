@@ -72,6 +72,7 @@ fun SettingsScreen(
     frameEnabled: Boolean,
     frameInterval: FrameInterval,
     accessibilityEnabled: Boolean,
+    accessibilityLegacyListed: Boolean = false,
     frameCount: Long,
     webDavAccount: WebDavAccount,
     hindsightConfigured: Boolean,
@@ -219,7 +220,14 @@ fun SettingsScreen(
                         fontWeight = FontWeight.Medium,
                     )
                     Text(
-                        "帧视图与文档视图需读取界面文字与位置。点击开关将跳转系统设置引导授权或关闭。",
+                        text = when {
+                            accessibilityEnabled ->
+                                "已开启「留迹画面记录」。帧视图与文档视图可读取界面文字与位置；点击开关可前往系统设置关闭。"
+                            accessibilityLegacyListed ->
+                                "请到系统无障碍中开启「留迹画面记录」。检测到仍挂着旧的「留迹」项：请先关闭旧项，再打开「留迹画面记录」（微信等应用需本项才能正确读字）。"
+                            else ->
+                                "请到系统无障碍中开启「留迹画面记录」（不是仅显示「留迹」的旧项）。用于帧视图读界面文字；微信等混淆节点的应用依赖此项。"
+                        },
                         color = if (accessibilityEnabled) TextMuted else Accent,
                         fontSize = 12.sp,
                         lineHeight = 18.sp,

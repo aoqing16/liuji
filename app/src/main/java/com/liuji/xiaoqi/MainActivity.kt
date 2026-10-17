@@ -38,7 +38,6 @@ import com.liuji.xiaoqi.ui.hindsight.HindsightAppDetailScreen
 import com.liuji.xiaoqi.ui.hindsight.HindsightCloudScreen
 import com.liuji.xiaoqi.ui.settings.RuntimeLogScreen
 import com.liuji.xiaoqi.ui.settings.SettingsScreen
-import com.liuji.xiaoqi.ima.ImaSyncInterval
 import com.liuji.xiaoqi.ima.ImaSyncPrefs
 import com.liuji.xiaoqi.ima.ImaSyncRepository
 import com.liuji.xiaoqi.ima.ImaSyncScheduler
@@ -66,15 +65,13 @@ class MainActivity : ComponentActivity() {
             val n = prefs.poisonDayNoteIds()
             AppLog.i("ImaSync", "poisoned day states: $n")
         }
-        if (intent.getBooleanExtra("seed_ima_auto", false)) {
-            prefs.saveAuto(true, ImaSyncInterval.H1)
-        } else {
-            prefs.saveAuto(false, prefs.loadConfig().interval)
-        }
+        prefs.saveAuto(intent.getBooleanExtra("seed_ima_auto", false))
         ImaSyncScheduler.reconcile(this)
         if (intent.getBooleanExtra("seed_ima_sync", false)) {
             CoroutineScope(Dispatchers.IO).launch {
-                val report = runCatching { ImaSyncRepository(this@MainActivity).syncIncremental() }
+                val report = runCatching {
+                    ImaSyncRepository(this@MainActivity).syncIncremental(forceOverwrite = true)
+                }
                     .onFailure { AppLog.e("ImaSync", "seed sync failed", it) }
                     .getOrNull()
                 AppLog.i("ImaSync", "seed sync done: ${report?.message}")
@@ -134,12 +131,22 @@ class MainActivity : ComponentActivity() {
                     viewModel.exportEvents.collect { event ->
                         when (event) {
                             is ExportEvent.Share -> {
-                                startActivity(
-                                    android.content.Intent.createChooser(
-                                        event.intent,
-                                        "导出使用数据 Markdown",
-                                    ),
-                                )
+                                val chooser = android.content.Intent.createChooser(
+                                    event.intent,
+                                    "导出使用数据 Markdown",
+                                ).apply {
+                                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                }
+                                runCatching { startActivity(chooser) }
+                                    .onFailure {
+                                        viewModel.consumeMessage()
+                                        // 无可用分享目标时给用户可见提示
+                                        android.widget.Toast.makeText(
+                                            this@MainActivity,
+                                            "无法打开分享：${it.message ?: "无可用应用"}",
+                                            android.widget.Toast.LENGTH_LONG,
+                                        ).show()
+                                    }
                             }
                         }
                     }
@@ -155,6 +162,7 @@ class MainActivity : ComponentActivity() {
                             frameEnabled = state.frameRecordingEnabled,
                             frameInterval = state.frameInterval,
                             accessibilityEnabled = state.accessibilityEnabled,
+                            accessibilityLegacyListed = state.accessibilityLegacyListed,
                             frameCount = state.frameCount,
                             webDavAccount = state.webDavAccount,
                             hindsightConfigured = state.hindsightConfigured,

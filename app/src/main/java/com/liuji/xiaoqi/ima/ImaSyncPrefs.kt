@@ -6,23 +6,18 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
 import org.json.JSONObject
 
-enum class ImaSyncInterval(val hours: Long, val label: String) {
-    H1(1, "每 1 小时"),
-    H6(6, "每 6 小时"),
-    D1(24, "每天"),
-    ;
-
-    companion object {
-        fun fromHours(h: Long): ImaSyncInterval =
-            entries.firstOrNull { it.hours == h } ?: H1
-    }
-}
-
 data class ImaDaySyncState(
-    val noteId: String,
+    /** 知识库文件 media_id（文件上传模式） */
+    val mediaId: String = "",
+    /** 文件上传成功时间 */
+    val fileSyncedAt: Long = 0L,
+    /** 兼容旧笔记同步字段（只读迁移） */
+    val noteId: String = "",
     val lastFrameId: Long = 0L,
     val usageSyncedAt: Long = 0L,
-)
+) {
+    val isFileSynced: Boolean get() = mediaId.isNotBlank() && fileSyncedAt > 0L
+}
 
 data class ImaSyncConfig(
     val clientId: String = "",
@@ -30,7 +25,6 @@ data class ImaSyncConfig(
     val knowledgeBaseName: String = "",
     val knowledgeBaseId: String = "",
     val autoEnabled: Boolean = false,
-    val interval: ImaSyncInterval = ImaSyncInterval.H1,
     val lastSuccessAt: Long = 0L,
     val lastErrorAt: Long = 0L,
     val lastError: String = "",
@@ -57,7 +51,6 @@ class ImaSyncPrefs(context: Context) {
         knowledgeBaseName = prefs.getString(KEY_KB_NAME, "").orEmpty(),
         knowledgeBaseId = prefs.getString(KEY_KB_ID, "").orEmpty(),
         autoEnabled = prefs.getBoolean(KEY_AUTO, false),
-        interval = ImaSyncInterval.fromHours(prefs.getLong(KEY_INTERVAL_H, 1L)),
         lastSuccessAt = prefs.getLong(KEY_LAST_OK, 0L),
         lastErrorAt = prefs.getLong(KEY_LAST_ERR_AT, 0L),
         lastError = prefs.getString(KEY_LAST_ERR, "").orEmpty(),
@@ -76,11 +69,8 @@ class ImaSyncPrefs(context: Context) {
         }
     }
 
-    fun saveAuto(enabled: Boolean, interval: ImaSyncInterval) {
-        prefs.edit {
-            putBoolean(KEY_AUTO, enabled)
-            putLong(KEY_INTERVAL_H, interval.hours)
-        }
+    fun saveAuto(enabled: Boolean) {
+        prefs.edit { putBoolean(KEY_AUTO, enabled) }
     }
 
     fun setKnowledgeBaseId(id: String) {
@@ -113,9 +103,12 @@ class ImaSyncPrefs(context: Context) {
         val root = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
         if (!root.has(date)) return null
         val o = root.getJSONObject(date)
+        val mediaId = o.optString("mediaId")
         val noteId = o.optString("noteId")
-        if (noteId.isBlank()) return null
+        if (mediaId.isBlank() && noteId.isBlank()) return null
         return ImaDaySyncState(
+            mediaId = mediaId,
+            fileSyncedAt = o.optLong("fileSyncedAt", 0L),
             noteId = noteId,
             lastFrameId = o.optLong("lastFrameId", 0L),
             usageSyncedAt = o.optLong("usageSyncedAt", 0L),
@@ -128,6 +121,8 @@ class ImaSyncPrefs(context: Context) {
         root.put(
             date,
             JSONObject()
+                .put("mediaId", state.mediaId)
+                .put("fileSyncedAt", state.fileSyncedAt)
                 .put("noteId", state.noteId)
                 .put("lastFrameId", state.lastFrameId)
                 .put("usageSyncedAt", state.usageSyncedAt),
@@ -146,36 +141,16 @@ class ImaSyncPrefs(context: Context) {
         prefs.edit { putString(KEY_DAYS, "{}") }
     }
 
-    /**
-     * offset 符号曾算反（昨天变成 +1 → 查到「明天」空汇总）。
-     * 一次性清掉 usageSyncedAt，让已上传的空汇总按正确区间重传。
-     */
-    fun migrateUsageOffsetSignFix(): Boolean {
-        if (prefs.getBoolean(KEY_MIGRATE_USAGE_OFFSET, false)) return false
-        val raw = prefs.getString(KEY_DAYS, "{}").orEmpty()
-        val root = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
-        val dates = root.keys().asSequence().toList()
-        for (date in dates) {
-            val o = root.optJSONObject(date) ?: continue
-            o.put("usageSyncedAt", 0L)
-            root.put(date, o)
-        }
-        prefs.edit {
-            putString(KEY_DAYS, root.toString())
-            putBoolean(KEY_MIGRATE_USAGE_OFFSET, true)
-        }
-        return true
-    }
-
-    /** 调试：把已缓存 noteId 改成无效值，模拟远端删除后本地仍「已是最新」 */
+    /** 调试：污染日状态 */
     fun poisonDayNoteIds(): Int {
         val raw = prefs.getString(KEY_DAYS, "{}").orEmpty()
         val root = runCatching { JSONObject(raw) }.getOrElse { JSONObject() }
         val dates = root.keys().asSequence().toList()
         for (date in dates) {
             val o = root.optJSONObject(date) ?: continue
+            o.put("mediaId", "deleted_or_missing_$date")
+            o.put("fileSyncedAt", 0L)
             o.put("noteId", "deleted_or_missing_$date")
-            o.put("usageSyncedAt", System.currentTimeMillis())
             root.put(date, o)
         }
         prefs.edit { putString(KEY_DAYS, root.toString()) }
@@ -188,12 +163,10 @@ class ImaSyncPrefs(context: Context) {
         private const val KEY_KB_NAME = "kb_name"
         private const val KEY_KB_ID = "kb_id"
         private const val KEY_AUTO = "auto_enabled"
-        private const val KEY_INTERVAL_H = "interval_hours"
         private const val KEY_LAST_OK = "last_ok_at"
         private const val KEY_LAST_ERR_AT = "last_err_at"
         private const val KEY_LAST_ERR = "last_err"
         private const val KEY_LAST_MSG = "last_msg"
         private const val KEY_DAYS = "day_states"
-        private const val KEY_MIGRATE_USAGE_OFFSET = "migrate_usage_offset_sign_v1"
     }
 }

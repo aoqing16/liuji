@@ -5,7 +5,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Category
-import androidx.compose.material.icons.outlined.CloudSync
+import androidx.compose.material.icons.outlined.Chat
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Today
@@ -56,8 +56,8 @@ fun PhoneHomeScaffold(
                 NavigationBarItem(
                     selected = bottomTab == PhoneBottomTab.CLOUD_SYNC,
                     onClick = { onBottomTab(PhoneBottomTab.CLOUD_SYNC) },
-                    icon = { Icon(Icons.Outlined.CloudSync, contentDescription = null) },
-                    label = { Text("云同步") },
+                    icon = { Icon(Icons.Outlined.Chat, contentDescription = null) },
+                    label = { Text("AI对话") },
                 )
             }
         },

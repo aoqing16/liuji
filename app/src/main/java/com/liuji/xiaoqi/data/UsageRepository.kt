@@ -662,7 +662,7 @@ class UsageRepository(private val context: Context) {
         return dao.getFramesForPackage(packageName, startMillis, endMillis).map { it.toSnapshot() }
     }
 
-    /** 与 [loadSummary] 同一时间窗的全部帧（导出用） */
+    /** 与 [loadSummary] 同一时间窗的全部帧（小窗可用；周/月导出请用 [loadExportFrameTexts]） */
     suspend fun loadFramesForPeriod(period: StatsPeriod, offset: Int): List<UiFrameSnapshot> {
         val today = LocalDate.now(zoneId)
         val (start, endInclusive) = rangeFor(period, today, offset)
@@ -681,6 +681,59 @@ class UsageRepository(private val context: Context) {
             System.currentTimeMillis(),
         )
         return dao.getFramesInRange(startMillis, endMillis).map { it.toSnapshot() }
+    }
+
+    /**
+     * 导出用：分批扫描帧，只收集去重文案，避免整窗 `getFramesInRange` 一次进内存导致 OOM / Cursor 失败。
+     */
+    suspend fun loadExportFrameTextsForPeriod(
+        period: StatsPeriod,
+        offset: Int,
+        excludePackages: Set<String> = emptySet(),
+    ): ExportFrameTexts {
+        val today = LocalDate.now(zoneId)
+        val (start, endInclusive) = rangeFor(period, today, offset)
+        return loadExportFrameTextsForDateRange(start, endInclusive, excludePackages)
+    }
+
+    suspend fun loadExportFrameTextsForDateRange(
+        start: LocalDate,
+        endInclusive: LocalDate,
+        excludePackages: Set<String> = emptySet(),
+    ): ExportFrameTexts {
+        require(!endInclusive.isBefore(start)) { "结束日期不能早于开始日期" }
+        val startMillis = start.atStartOfDay(zoneId).toInstant().toEpochMilli()
+        val endMillis = min(
+            endInclusive.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli(),
+            System.currentTimeMillis(),
+        )
+        val byApp = LinkedHashMap<String, LinkedHashSet<String>>()
+        var frameCount = 0
+        var afterId = 0L
+        while (true) {
+            val batch = dao.getFramesInRangeAfterId(
+                startMillis,
+                endMillis,
+                afterId,
+                EXPORT_FRAME_BATCH,
+            )
+            if (batch.isEmpty()) break
+            for (row in batch) {
+                afterId = row.id
+                if (row.packageName in excludePackages) continue
+                frameCount++
+                val appName = resolveLabel(row.packageName).ifBlank { row.packageName }
+                val bucket = byApp.getOrPut(appName) { LinkedHashSet() }
+                val nodes = runCatching { FrameJson.textsFromJson(row.textsJson) }
+                    .getOrDefault(emptyList())
+                for (n in nodes) {
+                    n.text.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
+                    n.desc.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
+                }
+            }
+            if (batch.size < EXPORT_FRAME_BATCH) break
+        }
+        return ExportFrameTexts(frameCount = frameCount, textsByApp = byApp)
     }
 
     suspend fun listPrivacyApps(): List<PrivacyAppEntity> = dao.getPrivacyApps()
@@ -803,5 +856,12 @@ class UsageRepository(private val context: Context) {
         private const val COLLECT_LOOKBACK_MILLIS = DAY_MILLIS
         /** 同包名会话间隔小于此值则合并为一次进入/离开 */
         private const val TIMELINE_MERGE_GAP_MILLIS = 60_000L
+        private const val EXPORT_FRAME_BATCH = 40
     }
 }
+
+/** 导出 Markdown「画面文案」段：分批扫描结果 */
+data class ExportFrameTexts(
+    val frameCount: Int,
+    val textsByApp: Map<String, Set<String>>,
+)

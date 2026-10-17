@@ -148,7 +148,7 @@ fun RuntimeLogScreen(
                     )
                     Spacer(Modifier.height(Space.sm))
                     Text(
-                        "使用云同步或产生错误后，相关记录会显示在这里。",
+                        "使用 AI对话同步或产生错误后，相关记录会显示在这里。",
                         color = TextMuted,
                         fontSize = 13.sp,
                     )
@@ -192,7 +192,10 @@ private fun exportLog(context: Context) {
         Toast.makeText(context, "暂无日志可导出", Toast.LENGTH_SHORT).show()
         return
     }
+    val share = RuntimeLogExporter.shareIntent(context, result)
     context.startActivity(
-        Intent.createChooser(RuntimeLogExporter.shareIntent(result), "导出运行日志"),
+        Intent.createChooser(share, "导出运行日志").apply {
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        },
     )
 }

@@ -30,7 +30,11 @@ object UsageJsonExporter {
         timeline: List<TimelineItem> = emptyList(),
         appLabelOf: (String) -> String = { it },
         zoneId: ZoneId = ZoneId.systemDefault(),
+        textsByApp: Map<String, Set<String>>? = null,
+        frameCount: Int? = null,
     ): String {
+        val dict = textsByApp ?: buildTextDictionary(frames, appLabelOf)
+        val framesN = frameCount ?: frames.size
         val sb = StringBuilder()
         val totalMinutes = toMinutes(summary.totalMillis)
         val avgMinutes = toMinutes(summary.averageDailyMillis)
@@ -62,7 +66,7 @@ object UsageJsonExporter {
         sb.appendLine("- 应用数：${summary.apps.size}")
         sb.appendLine("- 分类数：${summary.categories.size}")
         sb.appendLine("- 会话数：${timeline.size}")
-        sb.appendLine("- 画面帧数：${frames.size}")
+        sb.appendLine("- 画面帧数：$framesN")
         sb.appendLine()
 
         when (summary.period) {
@@ -93,7 +97,7 @@ object UsageJsonExporter {
         }
 
         appendTimelineSection(sb, timeline, zoneId)
-        appendTextDictionarySection(sb, frames, appLabelOf)
+        appendTextDictionarySection(sb, dict)
 
         return sb.toString()
     }
@@ -279,13 +283,10 @@ object UsageJsonExporter {
         sb.appendLine()
     }
 
-    private fun appendTextDictionarySection(
-        sb: StringBuilder,
+    private fun buildTextDictionary(
         frames: List<UiFrameSnapshot>,
         appLabelOf: (String) -> String,
-    ) {
-        sb.appendLine("## 画面文案")
-        sb.appendLine()
+    ): Map<String, Set<String>> {
         val byApp = LinkedHashMap<String, LinkedHashSet<String>>()
         for (f in frames) {
             val appName = appLabelOf(f.packageName).ifBlank { f.packageName }
@@ -295,6 +296,15 @@ object UsageJsonExporter {
                 n.desc.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
             }
         }
+        return byApp
+    }
+
+    private fun appendTextDictionarySection(
+        sb: StringBuilder,
+        byApp: Map<String, Set<String>>,
+    ) {
+        sb.appendLine("## 画面文案")
+        sb.appendLine()
         if (byApp.isEmpty()) {
             sb.appendLine("_无画面文案（或均在隐私名单中）_")
             sb.appendLine()

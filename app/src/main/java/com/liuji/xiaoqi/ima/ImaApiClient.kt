@@ -7,7 +7,13 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 
 data class ImaKbInfo(val id: String, val name: String)
 
@@ -87,14 +93,14 @@ class ImaApiClient(
                         error = "服务器返回异常，请稍后重试",
                     )
                 }
-                val retcode = if (parsed.has("retcode") && !parsed.isNull("retcode")) {
-                    parsed.optInt("retcode")
-                } else {
-                    null
+                val retcode = when {
+                    parsed.has("retcode") && !parsed.isNull("retcode") -> parsed.optInt("retcode")
+                    parsed.has("code") && !parsed.isNull("code") -> parsed.optInt("code")
+                    else -> null
                 }
                 val data = parsed.optJSONObject("data")
                 val httpOk = resp.code in 200..299
-                val codeOk = (retcode == null && data != null) || retcode == 0
+                val codeOk = retcode == null || retcode == 0
                 val errHint = parsed.optString("errmsg").ifBlank { null }
                     ?: parsed.optString("msg").ifBlank { null }
                     ?: raw.take(180)
@@ -143,6 +149,268 @@ class ImaApiClient(
         } else {
             res to hit.id
         }
+    }
+
+    fun createKnowledgeBase(name: String): Pair<ImaApiResult, String?> {
+        val res = post(
+            "openapi/wiki/v1/create_knowledge_base",
+            JSONObject().put("name", name.trim()),
+        )
+        if (!res.ok) return res to null
+        val data = res.data ?: return res to null
+        val id = sequenceOf("id", "knowledge_base_id", "kb_id")
+            .mapNotNull { key -> data.optString(key).takeIf { it.isNotBlank() } }
+            .firstOrNull()
+        return res to id
+    }
+
+    /** 按名称查找；不存在则创建。 */
+    fun ensureKnowledgeBase(name: String): Pair<ImaApiResult, String?> {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) {
+            return ImaApiResult(ok = false, error = "知识库名称不能为空") to null
+        }
+        val (findRes, foundId) = resolveKnowledgeBaseId(trimmed)
+        if (findRes.ok && !foundId.isNullOrBlank()) return findRes to foundId
+        // 列表接口失败则直接失败；仅「未找到」时才创建
+        if (!findRes.ok && findRes.error?.contains("未找到知识库") != true) {
+            return findRes to null
+        }
+        val (createRes, createdId) = createKnowledgeBase(trimmed)
+        if (createRes.ok && !createdId.isNullOrBlank()) return createRes to createdId
+        // 创建成功但未返回 id：再列一次
+        if (createRes.ok) {
+            val (again, id2) = resolveKnowledgeBaseId(trimmed)
+            if (again.ok && !id2.isNullOrBlank()) return again to id2
+        }
+        return createRes to createdId
+    }
+
+    data class CosCredential(
+        val mediaId: String,
+        val token: String,
+        val secretId: String,
+        val secretKey: String,
+        val startTime: Long,
+        val expiredTime: Long,
+        val bucketName: String,
+        val region: String,
+        val cosKey: String,
+        val cosUrl: String? = null,
+    )
+
+    fun createMedia(
+        knowledgeBaseId: String,
+        fileName: String,
+        fileSize: Long,
+        contentType: String = "text/markdown",
+        fileExt: String = "md",
+    ): Pair<ImaApiResult, CosCredential?> {
+        val body = JSONObject()
+            .put("file_name", fileName)
+            .put("file_size", fileSize)
+            .put("content_type", contentType)
+            .put("knowledge_base_id", knowledgeBaseId)
+            .put("file_ext", fileExt)
+        val res = post("openapi/wiki/v1/create_media", body)
+        if (!res.ok) return res to null
+        val data = res.data ?: return res to null
+        val mediaId = data.optString("media_id")
+        val cred = data.optJSONObject("cos_credential") ?: return res to null
+        if (mediaId.isBlank()) return res to null
+        val parsed = CosCredential(
+            mediaId = mediaId,
+            token = cred.optString("token"),
+            secretId = cred.optString("secret_id"),
+            secretKey = cred.optString("secret_key"),
+            startTime = cred.optString("start_time").toLongOrNull()
+                ?: cred.optLong("start_time"),
+            expiredTime = cred.optString("expired_time").toLongOrNull()
+                ?: cred.optLong("expired_time"),
+            bucketName = cred.optString("bucket_name"),
+            region = cred.optString("region"),
+            cosKey = cred.optString("cos_key").trimStart('/'),
+            cosUrl = cred.optString("cos_url").ifBlank { null }
+                ?: data.optString("cos_url").ifBlank { null },
+        )
+        if (parsed.secretId.isBlank() || parsed.secretKey.isBlank() ||
+            parsed.bucketName.isBlank() || parsed.region.isBlank() || parsed.cosKey.isBlank()
+        ) {
+            return ImaApiResult(ok = false, error = "create_media 凭证不完整") to null
+        }
+        return res to parsed
+    }
+
+    fun uploadFileToCos(file: File, contentType: String, cred: CosCredential): ImaApiResult {
+        return try {
+            val host = "${cred.bucketName}.cos.${cred.region}.myqcloud.com"
+            val cosKey = cred.cosKey
+            val url = cred.cosUrl?.takeIf { it.isNotBlank() }
+                ?: "https://$host/${URLEncoder.encode(cosKey, "UTF-8").replace("+", "%20").replace("%2F", "/")}"
+            val start = if (cred.startTime > 0) cred.startTime else System.currentTimeMillis() / 1000
+            val expired = if (cred.expiredTime > start) cred.expiredTime else start + 1800
+            val keyTime = "$start;$expired"
+            val signKey = hmacSha1Hex(cred.secretKey, keyTime)
+            val httpString = "put\n/$cosKey\n\nhost=$host\n"
+            val stringToSign = "sha1\n$keyTime\n${sha1Hex(httpString)}\n"
+            val signature = hmacSha1Hex(signKey, stringToSign)
+            val auth = "q-sign-algorithm=sha1" +
+                "&q-ak=${cred.secretId}" +
+                "&q-sign-time=$keyTime" +
+                "&q-key-time=$keyTime" +
+                "&q-header-list=host" +
+                "&q-url-param-list=" +
+                "&q-signature=$signature"
+            val bytes = file.readBytes()
+            val reqBuilder = Request.Builder()
+                .url(url)
+                .put(bytes.toRequestBody(contentType.toMediaType()))
+                .header("Host", host)
+                .header("Authorization", auth)
+                .header("Content-Type", contentType)
+            if (cred.token.isNotBlank()) {
+                reqBuilder.header("x-cos-security-token", cred.token)
+            }
+            http.newCall(reqBuilder.build()).execute().use { resp ->
+                if (resp.code in 200..299) {
+                    ImaApiResult(ok = true, statusCode = resp.code)
+                } else {
+                    ImaApiResult(
+                        ok = false,
+                        statusCode = resp.code,
+                        error = "COS 上传失败 HTTP ${resp.code}: ${resp.body?.string()?.take(200)}",
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            ImaApiResult(ok = false, error = e.message ?: e.toString())
+        }
+    }
+
+    fun addKnowledgeFile(
+        knowledgeBaseId: String,
+        mediaId: String,
+        fileName: String,
+        fileSize: Long,
+        cosKey: String,
+        mediaType: Int = 7,
+    ): ImaApiResult {
+        val body = JSONObject()
+            .put("media_type", mediaType)
+            .put("media_id", mediaId)
+            .put("title", fileName)
+            .put("knowledge_base_id", knowledgeBaseId)
+            .put(
+                "file_info",
+                JSONObject()
+                    .put("cos_key", cosKey)
+                    .put("file_size", fileSize)
+                    .put("file_name", fileName),
+            )
+        return post("openapi/wiki/v1/add_knowledge", body)
+    }
+
+    fun renameKnowledge(
+        knowledgeBaseId: String,
+        mediaId: String,
+        newName: String,
+    ): ImaApiResult {
+        return post(
+            "openapi/wiki/v1/rename_knowledge",
+            JSONObject()
+                .put("knowledge_base_id", knowledgeBaseId)
+                .put("media_id", mediaId)
+                .put("name", newName)
+                .put("title", newName),
+        )
+    }
+
+    fun listKnowledgeByTitle(
+        knowledgeBaseId: String,
+        title: String,
+    ): Pair<ImaApiResult, List<KbHit>> {
+        val hits = ArrayList<KbHit>()
+        var cursor = ""
+        var last: ImaApiResult = ImaApiResult(ok = false, error = "empty")
+        repeat(40) {
+            last = post(
+                "openapi/wiki/v1/get_knowledge_list",
+                JSONObject()
+                    .put("knowledge_base_id", knowledgeBaseId)
+                    .put("cursor", cursor)
+                    .put("limit", 50),
+            )
+            if (!last.ok) return last to hits
+            val data = last.data ?: return last to hits
+            val arr = data.optJSONArray("knowledge_list")
+                ?: data.optJSONArray("info_list")
+                ?: JSONArray()
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val t = o.optString("title").ifBlank { o.optString("name") }
+                if (t == title) {
+                    val mid = o.optString("media_id").ifBlank {
+                        sequenceOf("content_id", "id", "note_id")
+                            .mapNotNull { k -> o.optString(k).takeIf { it.isNotBlank() } }
+                            .firstOrNull()
+                            .orEmpty()
+                    }
+                    if (mid.isNotBlank()) hits += KbHit(mediaId = mid, title = t)
+                }
+            }
+            if (data.optBoolean("is_end", true)) return last to hits
+            cursor = data.optString("next_cursor")
+            if (cursor.isBlank()) return last to hits
+        }
+        return last to hits
+    }
+
+    /**
+     * 覆盖上传：同名旧文件 rename 归档 → create_media → COS → add_knowledge。
+     * @return mediaId
+     */
+    fun overwriteUploadMarkdownFile(
+        knowledgeBaseId: String,
+        file: File,
+        fileName: String = file.name,
+    ): Pair<ImaApiResult, String?> {
+        val (listRes, olds) = listKnowledgeByTitle(knowledgeBaseId, fileName)
+        if (!listRes.ok && listRes.error != null) {
+            AppLog.w(TAG, "listKnowledgeByTitle: ${listRes.error}")
+        }
+        val ts = System.currentTimeMillis() / 1000
+        val stem = fileName.substringBeforeLast('.', fileName)
+        val ext = if (fileName.contains('.')) ".${fileName.substringAfterLast('.')}" else ".md"
+        olds.forEachIndexed { index, hit ->
+            val archived = "${stem}_archived_${ts}_$index$ext"
+            val ren = renameKnowledge(knowledgeBaseId, hit.mediaId, archived)
+            if (!ren.ok) {
+                return ImaApiResult(
+                    ok = false,
+                    error = ren.error ?: ren.errmsg ?: "归档旧文件失败",
+                ) to null
+            }
+        }
+        val (createRes, cred) = createMedia(
+            knowledgeBaseId = knowledgeBaseId,
+            fileName = fileName,
+            fileSize = file.length(),
+            contentType = "text/markdown",
+            fileExt = ext.removePrefix("."),
+        )
+        if (!createRes.ok || cred == null) {
+            return createRes to null
+        }
+        val putRes = uploadFileToCos(file, "text/markdown", cred)
+        if (!putRes.ok) return putRes to null
+        val addRes = addKnowledgeFile(
+            knowledgeBaseId = knowledgeBaseId,
+            mediaId = cred.mediaId,
+            fileName = fileName,
+            fileSize = file.length(),
+            cosKey = cred.cosKey,
+        )
+        return addRes to if (addRes.ok) cred.mediaId else null
     }
 
     fun importDoc(title: String, markdown: String): Pair<ImaApiResult, String?> {
@@ -361,6 +629,18 @@ class ImaApiClient(
                 .joinToString(" ")
                 .ifBlank { if (code > 0) "HTTP $code" else "" }
             return isRetryableHint(hint)
+        }
+
+        private fun sha1Hex(text: String): String {
+            val digest = MessageDigest.getInstance("SHA-1").digest(text.toByteArray(StandardCharsets.UTF_8))
+            return digest.joinToString("") { "%02x".format(it) }
+        }
+
+        private fun hmacSha1Hex(key: String, text: String): String {
+            val mac = Mac.getInstance("HmacSHA1")
+            mac.init(SecretKeySpec(key.toByteArray(StandardCharsets.UTF_8), "HmacSHA1"))
+            return mac.doFinal(text.toByteArray(StandardCharsets.UTF_8))
+                .joinToString("") { "%02x".format(it) }
         }
     }
 }
