@@ -7,10 +7,12 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.database.sqlite.SQLiteException
 import android.os.Build
 import android.os.Process
 import android.provider.Settings
 import androidx.core.content.getSystemService
+import kotlinx.coroutines.yield
 import com.liuji.xiaoqi.data.db.AppMetaEntity
 import com.liuji.xiaoqi.data.db.AppSettingsEntity
 import com.liuji.xiaoqi.data.db.PrivacyAppEntity
@@ -710,13 +712,19 @@ class UsageRepository(private val context: Context) {
         val byApp = LinkedHashMap<String, LinkedHashSet<String>>()
         var frameCount = 0
         var afterId = 0L
+        var limit = EXPORT_FRAME_BATCH_MAX
+        var okStreak = 0
         while (true) {
-            val batch = dao.getFramesInRangeAfterId(
-                startMillis,
-                endMillis,
-                afterId,
-                EXPORT_FRAME_BATCH,
-            )
+            val batch = try {
+                dao.getFrameTextsInRangeAfterId(startMillis, endMillis, afterId, limit)
+            } catch (e: Exception) {
+                if (limit > 1 && isCursorWindowError(e)) {
+                    limit = (limit / 2).coerceAtLeast(1)
+                    okStreak = 0
+                    continue
+                }
+                throw e
+            }
             if (batch.isEmpty()) break
             for (row in batch) {
                 afterId = row.id
@@ -724,16 +732,37 @@ class UsageRepository(private val context: Context) {
                 frameCount++
                 val appName = resolveLabel(row.packageName).ifBlank { row.packageName }
                 val bucket = byApp.getOrPut(appName) { LinkedHashSet() }
-                val nodes = runCatching { FrameJson.textsFromJson(row.textsJson) }
-                    .getOrDefault(emptyList())
-                for (n in nodes) {
-                    n.text.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
-                    n.desc.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
-                }
+                FrameJson.collectExportStrings(
+                    row.textsJson,
+                    FrameJson.includeDescForPackage(row.packageName),
+                    bucket,
+                )
             }
-            if (batch.size < EXPORT_FRAME_BATCH) break
+            yield()
+            if (batch.size < limit) break
+            okStreak++
+            if (limit < EXPORT_FRAME_BATCH_MAX && okStreak >= 8) {
+                limit = (limit * 2).coerceAtMost(EXPORT_FRAME_BATCH_MAX)
+                okStreak = 0
+            }
         }
         return ExportFrameTexts(frameCount = frameCount, textsByApp = byApp)
+    }
+
+    private fun isCursorWindowError(e: Throwable): Boolean {
+        var cur: Throwable? = e
+        while (cur != null) {
+            if (cur is SQLiteException || cur is IllegalStateException) {
+                val hint = cur.message.orEmpty()
+                if (hint.contains("CursorWindow", ignoreCase = true) ||
+                    hint.contains("Row too big", ignoreCase = true)
+                ) {
+                    return true
+                }
+            }
+            cur = cur.cause
+        }
+        return false
     }
 
     suspend fun listPrivacyApps(): List<PrivacyAppEntity> = dao.getPrivacyApps()
@@ -856,7 +885,8 @@ class UsageRepository(private val context: Context) {
         private const val COLLECT_LOOKBACK_MILLIS = DAY_MILLIS
         /** 同包名会话间隔小于此值则合并为一次进入/离开 */
         private const val TIMELINE_MERGE_GAP_MILLIS = 60_000L
-        private const val EXPORT_FRAME_BATCH = 40
+        /** 单批行数；过大可能撑爆 CursorWindow，失败时会自动减半 */
+        private const val EXPORT_FRAME_BATCH_MAX = 200
     }
 }
 

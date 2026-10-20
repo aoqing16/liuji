@@ -964,7 +964,11 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(message = null) }
     }
 
-    fun exportPeriod(period: StatsPeriod, useCurrentOffset: Boolean = true) {
+    fun exportPeriod(
+        period: StatsPeriod,
+        includeScreenTexts: Boolean = true,
+        useCurrentOffset: Boolean = true,
+    ) {
         if (!_state.value.hasPermission || _state.value.exporting) return
         exportJob?.cancel()
         exportJob = viewModelScope.launch {
@@ -978,13 +982,17 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
                     val summary = repository.loadSummary(period, offset)
-                    val frameTexts = repository.loadExportFrameTextsForPeriod(
-                        period,
-                        offset,
-                        excludePackages = privacy,
-                    )
+                    val frameTexts = if (includeScreenTexts) {
+                        val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
+                        repository.loadExportFrameTextsForPeriod(
+                            period,
+                            offset,
+                            excludePackages = privacy,
+                        )
+                    } else {
+                        null
+                    }
                     val timeline = repository.loadTimelineForPeriod(period, offset, sync = false)
                     val app = getApplication<Application>()
                     val result = UsageExportWriter.writeAndGetShareUri(
@@ -993,6 +1001,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                         frameTexts = frameTexts,
                         timeline = timeline,
                         appLabelOf = repository::appLabel,
+                        includeScreenTexts = includeScreenTexts,
                     )
                     result to UsageExportWriter.shareIntent(app, result)
                 }
@@ -1007,7 +1016,11 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun exportDateRange(start: LocalDate, end: LocalDate) {
+    fun exportDateRange(
+        start: LocalDate,
+        end: LocalDate,
+        includeScreenTexts: Boolean = true,
+    ) {
         if (!_state.value.hasPermission || _state.value.exporting) return
         if (end.isBefore(start)) return
         exportJob?.cancel()
@@ -1017,13 +1030,17 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
                     val summary = repository.loadSummaryForDateRange(start, end)
-                    val frameTexts = repository.loadExportFrameTextsForDateRange(
-                        start,
-                        end,
-                        excludePackages = privacy,
-                    )
+                    val frameTexts = if (includeScreenTexts) {
+                        val privacy = repository.listPrivacyApps().map { it.packageName }.toSet()
+                        repository.loadExportFrameTextsForDateRange(
+                            start,
+                            end,
+                            excludePackages = privacy,
+                        )
+                    } else {
+                        null
+                    }
                     val timeline = repository.loadTimelineForDateRange(start, end, sync = false)
                     val app = getApplication<Application>()
                     val result = UsageExportWriter.writeAndGetShareUri(
@@ -1032,6 +1049,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                         frameTexts = frameTexts,
                         timeline = timeline,
                         appLabelOf = repository::appLabel,
+                        includeScreenTexts = includeScreenTexts,
                     )
                     result to UsageExportWriter.shareIntent(app, result)
                 }

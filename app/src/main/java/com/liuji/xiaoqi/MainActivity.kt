@@ -321,7 +321,9 @@ class MainActivity : ComponentActivity() {
                                             onSelectHour = viewModel::selectHour,
                                             onOpenExport = viewModel::openExportDialog,
                                             onDismissExport = viewModel::dismissExportDialog,
-                                            onExportPeriod = { period -> viewModel.exportPeriod(period) },
+                                            onExportPeriod = { period, includeScreenTexts ->
+                                                viewModel.exportPeriod(period, includeScreenTexts)
+                                            },
                                             onExportDateRange = viewModel::exportDateRange,
                                             onMessageShown = viewModel::consumeMessage,
                                             onOpenSettings = viewModel::openSettings,

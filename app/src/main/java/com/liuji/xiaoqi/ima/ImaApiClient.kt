@@ -154,7 +154,9 @@ class ImaApiClient(
     fun createKnowledgeBase(name: String): Pair<ImaApiResult, String?> {
         val res = post(
             "openapi/wiki/v1/create_knowledge_base",
-            JSONObject().put("name", name.trim()),
+            JSONObject()
+                .put("name", name.trim())
+                .put("type", "KBT_MINE_KB"),
         )
         if (!res.ok) return res to null
         val data = res.data ?: return res to null

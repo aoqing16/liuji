@@ -77,6 +77,13 @@ data class UiFrameEntity(
     @ColumnInfo(name = "texts_json") val textsJson: String,
 )
 
+/** 导出扫描投影，不是表实体 */
+data class FrameTextExportRow(
+    val id: Long,
+    @ColumnInfo(name = "package_name") val packageName: String,
+    @ColumnInfo(name = "texts_json") val textsJson: String,
+)
+
 /** 画面记录黑名单；user_exempt=true 表示用户已移除，自动/特征库不再加回 */
 @Entity(tableName = "frame_blacklist")
 data class FrameBlacklistEntity(

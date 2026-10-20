@@ -22,22 +22,24 @@ object UsageExportWriter {
     fun writeAndGetShareUri(
         context: Context,
         summary: PeriodSummary,
-        frameTexts: ExportFrameTexts,
+        frameTexts: ExportFrameTexts?,
         timeline: List<TimelineItem> = emptyList(),
         appLabelOf: (String) -> String = { it },
+        includeScreenTexts: Boolean = true,
     ): ExportResult {
-        val markdown = UsageJsonExporter.toMarkdown(
-            summary = summary,
-            timeline = timeline,
-            appLabelOf = appLabelOf,
-            textsByApp = frameTexts.textsByApp,
-            frameCount = frameTexts.frameCount,
-        )
         val fileName = UsageJsonExporter.fileName(summary)
         val dir = File(context.cacheDir, "exports").apply { mkdirs() }
         val file = File(dir, fileName)
-        file.outputStream().buffered().use { out ->
-            out.write(markdown.toByteArray(StandardCharsets.UTF_8))
+        file.bufferedWriter(StandardCharsets.UTF_8).use { out ->
+            UsageJsonExporter.writeMarkdown(
+                out = out,
+                summary = summary,
+                timeline = timeline,
+                appLabelOf = appLabelOf,
+                textsByApp = frameTexts?.textsByApp,
+                frameCount = frameTexts?.frameCount,
+                includeScreenTexts = includeScreenTexts,
+            )
         }
 
         val uri = FileProvider.getUriForFile(

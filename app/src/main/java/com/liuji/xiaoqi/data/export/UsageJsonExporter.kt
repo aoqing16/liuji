@@ -3,6 +3,7 @@ package com.liuji.xiaoqi.data.export
 import com.liuji.xiaoqi.data.Categories
 import com.liuji.xiaoqi.data.PeriodSummary
 import com.liuji.xiaoqi.data.StatsPeriod
+import com.liuji.xiaoqi.data.frame.FrameJson
 import com.liuji.xiaoqi.data.frame.TimelineItem
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
 import org.json.JSONArray
@@ -32,10 +33,33 @@ object UsageJsonExporter {
         zoneId: ZoneId = ZoneId.systemDefault(),
         textsByApp: Map<String, Set<String>>? = null,
         frameCount: Int? = null,
+        includeScreenTexts: Boolean = true,
     ): String {
-        val dict = textsByApp ?: buildTextDictionary(frames, appLabelOf)
-        val framesN = frameCount ?: frames.size
         val sb = StringBuilder()
+        writeMarkdown(
+            sb, summary, frames, timeline, appLabelOf, zoneId, textsByApp, frameCount, includeScreenTexts,
+        )
+        return sb.toString()
+    }
+
+    fun writeMarkdown(
+        out: Appendable,
+        summary: PeriodSummary,
+        frames: List<UiFrameSnapshot> = emptyList(),
+        timeline: List<TimelineItem> = emptyList(),
+        appLabelOf: (String) -> String = { it },
+        zoneId: ZoneId = ZoneId.systemDefault(),
+        textsByApp: Map<String, Set<String>>? = null,
+        frameCount: Int? = null,
+        includeScreenTexts: Boolean = true,
+    ) {
+        val dict = if (includeScreenTexts) {
+            textsByApp ?: buildTextDictionary(frames, appLabelOf)
+        } else {
+            emptyMap()
+        }
+        val framesN = frameCount ?: frames.size
+        val sb = out
         val totalMinutes = toMinutes(summary.totalMillis)
         val avgMinutes = toMinutes(summary.averageDailyMillis)
         val periodLabel = if (summary.rangeStart == summary.rangeEnd) {
@@ -51,11 +75,21 @@ object UsageJsonExporter {
         sb.appendLine("- 统计类型：${periodTypeZh(summary)}")
         sb.appendLine("- 日期范围：$periodLabel")
         sb.appendLine("- schema：1.6-md")
+        if (includeScreenTexts) {
+            sb.appendLine("- 画面文案：不含 desc，只保留可见 text（闲鱼仍保留 desc）")
+        } else {
+            sb.appendLine("- 屏幕文字记录：未导出")
+        }
         sb.appendLine()
         sb.appendLine(
-            "> 供 AI 分析时间去向与习惯。汇总层时长为分钟级中文；" +
-                "timeline 会话 duration 为整数秒。" +
-                "隐私 App 不出现在画面文案（时长与 timeline 仍保留）。",
+            if (includeScreenTexts) {
+                "> 供 AI 分析时间去向与习惯。汇总层时长为分钟级中文；" +
+                    "timeline 会话 duration 为整数秒。" +
+                    "隐私 App 不出现在画面文案（时长与 timeline 仍保留）。"
+            } else {
+                "> 供 AI 分析时间去向与习惯。汇总层时长为分钟级中文；" +
+                    "timeline 会话 duration 为整数秒。本次未导出帧视图画面文案。"
+            },
         )
         sb.appendLine()
 
@@ -66,23 +100,26 @@ object UsageJsonExporter {
         sb.appendLine("- 应用数：${summary.apps.size}")
         sb.appendLine("- 分类数：${summary.categories.size}")
         sb.appendLine("- 会话数：${timeline.size}")
-        sb.appendLine("- 画面帧数：$framesN")
+        if (includeScreenTexts) {
+            sb.appendLine("- 画面帧数：$framesN")
+        }
         sb.appendLine()
 
+        val screenHint = if (includeScreenTexts) "、画面文案" else ""
         when (summary.period) {
             StatsPeriod.DAY -> {
                 sb.appendLine(
-                    "> 单日数据：下方含分时明细、应用/分类排行、进入→离开会话、画面文案。",
+                    "> 单日数据：下方含分时明细、应用/分类排行、进入→离开会话$screenHint。",
                 )
             }
             StatsPeriod.WEEK -> {
                 sb.appendLine(
-                    "> 一周数据：日均仅按已过去天数计算；含每日明细、整周会话与画面文案。",
+                    "> 一周数据：日均仅按已过去天数计算；含每日明细、整周会话$screenHint。",
                 )
             }
             StatsPeriod.MONTH -> {
                 sb.appendLine(
-                    "> 一月数据：日均仅按已过去天数计算；含每日明细、整月会话与画面文案。",
+                    "> 一月数据：日均仅按已过去天数计算；含每日明细、整月会话$screenHint。",
                 )
             }
         }
@@ -97,9 +134,9 @@ object UsageJsonExporter {
         }
 
         appendTimelineSection(sb, timeline, zoneId)
-        appendTextDictionarySection(sb, dict)
-
-        return sb.toString()
+        if (includeScreenTexts) {
+            appendTextDictionarySection(sb, dict)
+        }
     }
 
     /** @deprecated 请用 [toMarkdown]；保留别名以免旧调用方编译失败 */
@@ -140,7 +177,7 @@ object UsageJsonExporter {
         }
     }
 
-    private fun appendAppsSection(sb: StringBuilder, summary: PeriodSummary, totalMinutes: Int) {
+    private fun appendAppsSection(sb: Appendable, summary: PeriodSummary, totalMinutes: Int) {
         sb.appendLine("## 应用排行")
         sb.appendLine()
         if (summary.apps.isEmpty()) {
@@ -159,15 +196,15 @@ object UsageJsonExporter {
                 .append(" | ")
                 .append(formatDurationZh(app.millis))
                 .append(" | ")
-                .append(minutes)
+                .append(minutes.toString())
                 .append(" | ")
-                .append(percent(minutes, totalMinutes))
+                .append(percent(minutes, totalMinutes).toString())
                 .appendLine(" |")
         }
         sb.appendLine()
     }
 
-    private fun appendCategoriesSection(sb: StringBuilder, summary: PeriodSummary, totalMinutes: Int) {
+    private fun appendCategoriesSection(sb: Appendable, summary: PeriodSummary, totalMinutes: Int) {
         sb.appendLine("## 分类排行")
         sb.appendLine()
         if (summary.categories.isEmpty()) {
@@ -188,9 +225,9 @@ object UsageJsonExporter {
                 .append(" | ")
                 .append(formatDurationZh(cat.millis))
                 .append(" | ")
-                .append(minutes)
+                .append(minutes.toString())
                 .append(" | ")
-                .append(percent(minutes, totalMinutes))
+                .append(percent(minutes, totalMinutes).toString())
                 .append(" | ")
                 .append(mdCell(top))
                 .appendLine(" |")
@@ -198,7 +235,7 @@ object UsageJsonExporter {
         sb.appendLine()
     }
 
-    private fun appendHourlySection(sb: StringBuilder, summary: PeriodSummary) {
+    private fun appendHourlySection(sb: Appendable, summary: PeriodSummary) {
         sb.appendLine("## 分时明细")
         sb.appendLine()
         sb.appendLine("| 小时 | 时长 | 分钟 | 主要分类 | 主要应用 |")
@@ -212,11 +249,11 @@ object UsageJsonExporter {
                 "${it.label} ${formatDurationZh(it.millis)}"
             }
             sb.append("| ")
-                .append(slot.hour)
+                .append(slot.hour.toString())
                 .append(" | ")
                 .append(formatDurationZh(slot.totalMillis))
                 .append(" | ")
-                .append(minutes)
+                .append(minutes.toString())
                 .append(" | ")
                 .append(mdCell(cats.ifBlank { "-" }))
                 .append(" | ")
@@ -226,7 +263,7 @@ object UsageJsonExporter {
         sb.appendLine()
     }
 
-    private fun appendDailySection(sb: StringBuilder, summary: PeriodSummary) {
+    private fun appendDailySection(sb: Appendable, summary: PeriodSummary) {
         sb.appendLine("## 每日明细")
         sb.appendLine()
         sb.appendLine("| 日期 | 星期 | 时长 | 分钟 | 分类 |")
@@ -243,7 +280,7 @@ object UsageJsonExporter {
                 .append(" | ")
                 .append(formatDurationZh(day.totalMillis))
                 .append(" | ")
-                .append(minutes)
+                .append(minutes.toString())
                 .append(" | ")
                 .append(mdCell(cats.ifBlank { "-" }))
                 .appendLine(" |")
@@ -252,7 +289,7 @@ object UsageJsonExporter {
     }
 
     private fun appendTimelineSection(
-        sb: StringBuilder,
+        sb: Appendable,
         timeline: List<TimelineItem>,
         zoneId: ZoneId,
     ) {
@@ -277,7 +314,7 @@ object UsageJsonExporter {
                 .append(" | ")
                 .append(Instant.ofEpochMilli(item.endMillis).atZone(zoneId).format(isoOffset))
                 .append(" | ")
-                .append(toSeconds(item.durationMillis))
+                .append(toSeconds(item.durationMillis).toString())
                 .appendLine(" |")
         }
         sb.appendLine()
@@ -293,14 +330,16 @@ object UsageJsonExporter {
             val bucket = byApp.getOrPut(appName) { LinkedHashSet() }
             for (n in f.texts) {
                 n.text.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
-                n.desc.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
+                if (FrameJson.includeDescForPackage(f.packageName)) {
+                    n.desc.trim().takeIf { it.isNotEmpty() }?.let { bucket.add(it) }
+                }
             }
         }
         return byApp
     }
 
     private fun appendTextDictionarySection(
-        sb: StringBuilder,
+        sb: Appendable,
         byApp: Map<String, Set<String>>,
     ) {
         sb.appendLine("## 画面文案")

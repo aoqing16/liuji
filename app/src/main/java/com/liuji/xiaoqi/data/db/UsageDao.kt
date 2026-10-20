@@ -179,6 +179,23 @@ interface UsageDao {
         limit: Int,
     ): List<UiFrameEntity>
 
+    /** 导出扫描：只取 id / 包名 / 文案 JSON，避免把坐标等整行实体物化 */
+    @Query(
+        """
+        SELECT id, package_name, texts_json FROM ui_frames
+        WHERE captured_at >= :startMillis AND captured_at < :endMillis
+          AND id > :afterId
+        ORDER BY id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameTextsInRangeAfterId(
+        startMillis: Long,
+        endMillis: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<FrameTextExportRow>
+
     @Query("SELECT COUNT(*) FROM ui_frames WHERE package_name = :packageName")
     suspend fun countFramesForPackage(packageName: String): Long
 
