@@ -92,6 +92,8 @@ data class FrameBlacklistEntity(
     @ColumnInfo(name = "source") val source: String,
     @ColumnInfo(name = "created_at") val createdAt: Long,
     @ColumnInfo(name = "user_exempt") val userExempt: Boolean = false,
+    /** true：自动稀疏候选，确认前不屏蔽录制 */
+    @ColumnInfo(name = "pending", defaultValue = "0") val pending: Boolean = false,
 )
 
 /** 隐私应用：导出时不带该包的帧文本 / text_dictionary */

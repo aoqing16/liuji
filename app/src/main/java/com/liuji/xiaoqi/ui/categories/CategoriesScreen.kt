@@ -57,6 +57,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.hideFromAccessibility
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.liuji.xiaoqi.data.AppCategoryAssignment
@@ -189,7 +190,6 @@ fun CategoriesScreen(
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CategoryCard(
     item: CategoryWithApps,
@@ -211,76 +211,61 @@ private fun CategoryCard(
         item.apps
     }
 
-    Row(
+    val slots = buildList {
+        visibleApps.forEach { add(CategoryChipSlot.App(it)) }
+        if (totalApps > COLLAPSED_APP_CHIP_LIMIT) {
+            add(
+                CategoryChipSlot.Expand(
+                    collapsed = collapsed,
+                    hiddenCount = totalApps - COLLAPSED_APP_CHIP_LIMIT,
+                ),
+            )
+        }
+        add(CategoryChipSlot.Add)
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(CardBackground)
             .border(1.dp, BorderDefault, RoundedCornerShape(14.dp))
-            .padding(start = 8.dp, end = 12.dp, top = 14.dp, bottom = 14.dp),
-        verticalAlignment = Alignment.Top,
+            .padding(horizontal = 12.dp, vertical = 14.dp),
     ) {
-        Icon(
-            Icons.Outlined.DragIndicator,
-            contentDescription = null,
-            tint = TextMuted.copy(alpha = 0.5f),
-            modifier = Modifier
-                .padding(top = 8.dp)
-                .size(22.dp),
-        )
-        Spacer(Modifier.width(4.dp))
-        Box(
-            Modifier
-                .size(40.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(tintBg)
-                .border(1.dp, tintBorder, RoundedCornerShape(10.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
-                Icons.Outlined.Category,
+                Icons.Outlined.DragIndicator,
                 contentDescription = null,
-                tint = cat.color,
+                tint = TextMuted.copy(alpha = 0.5f),
                 modifier = Modifier.size(22.dp),
             )
-        }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
+            Spacer(Modifier.width(4.dp))
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(tintBg)
+                    .border(1.dp, tintBorder, RoundedCornerShape(10.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Outlined.Category,
+                    contentDescription = null,
+                    tint = cat.color,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(Modifier.width(10.dp))
             Text(
                 text = cat.name,
                 color = TextStrong,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.height(10.dp))
-            if (item.apps.isNotEmpty()) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    visibleApps.forEach { app ->
-                        key(app.packageName) {
-                            AppTagChip(
-                                app = app,
-                                iconLoader = iconLoader,
-                                onRemove = { onRemoveApp(app) },
-                            )
-                        }
-                    }
-                    if (totalApps > COLLAPSED_APP_CHIP_LIMIT) {
-                        ExpandAppsChip(
-                            collapsed = collapsed,
-                            hiddenCount = totalApps - COLLAPSED_APP_CHIP_LIMIT,
-                            accent = cat.color,
-                            onClick = { appsExpanded = !appsExpanded },
-                        )
-                    }
-                }
-                Spacer(Modifier.height(10.dp))
-            }
-            AddAppChip(onClick = onAddApp, accent = cat.color)
-        }
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Spacer(Modifier.width(8.dp))
             IconButton(
                 onClick = onEdit,
                 modifier = Modifier
@@ -290,8 +275,8 @@ private fun CategoryCard(
             ) {
                 Icon(Icons.Outlined.Edit, contentDescription = "编辑", tint = TextMuted)
             }
-            Spacer(Modifier.height(8.dp))
             if (!cat.builtin) {
+                Spacer(Modifier.width(8.dp))
                 IconButton(
                     onClick = onDelete,
                     modifier = Modifier
@@ -303,7 +288,49 @@ private fun CategoryCard(
                 }
             }
         }
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            slots.chunked(2).forEach { rowSlots ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    rowSlots.forEach { slot ->
+                        Box(Modifier.weight(1f)) {
+                            when (slot) {
+                                is CategoryChipSlot.App -> key(slot.app.packageName) {
+                                    AppTagChip(
+                                        app = slot.app,
+                                        iconLoader = iconLoader,
+                                        onRemove = { onRemoveApp(slot.app) },
+                                    )
+                                }
+                                is CategoryChipSlot.Expand -> ExpandAppsChip(
+                                    collapsed = slot.collapsed,
+                                    hiddenCount = slot.hiddenCount,
+                                    accent = cat.color,
+                                    onClick = { appsExpanded = !appsExpanded },
+                                )
+                                CategoryChipSlot.Add -> AddAppChip(
+                                    onClick = onAddApp,
+                                    accent = cat.color,
+                                )
+                            }
+                        }
+                    }
+                    if (rowSlots.size == 1) {
+                        Spacer(Modifier.weight(1f))
+                    }
+                }
+            }
+        }
     }
+}
+
+private sealed interface CategoryChipSlot {
+    data class App(val app: AppCategoryAssignment) : CategoryChipSlot
+    data class Expand(val collapsed: Boolean, val hiddenCount: Int) : CategoryChipSlot
+    data object Add : CategoryChipSlot
 }
 
 @Composable
@@ -314,9 +341,11 @@ private fun AppTagChip(
 ) {
     Row(
         modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(SurfaceChip)
-            .padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AppIconImage(
@@ -325,16 +354,24 @@ private fun AppTagChip(
             tint = app.categoryColor,
             size = 18.dp,
         )
-        Spacer(Modifier.width(6.dp))
-        Text(app.label, color = TextStrong, fontSize = 12.sp, maxLines = 1)
-        IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "移除",
-                tint = TextMuted,
-                modifier = Modifier.size(14.dp),
-            )
-        }
+        Text(
+            app.label,
+            color = TextStrong,
+            fontSize = 12.sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .padding(horizontal = 6.dp)
+                .weight(1f),
+        )
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "移除",
+            tint = TextMuted,
+            modifier = Modifier
+                .size(16.dp)
+                .clickable(onClick = onRemove),
+        )
     }
 }
 
@@ -342,15 +379,18 @@ private fun AppTagChip(
 private fun AddAppChip(onClick: () -> Unit, accent: Color) {
     Row(
         modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
             .clip(RoundedCornerShape(8.dp))
             .border(1.dp, accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Outlined.Add, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
         Spacer(Modifier.width(4.dp))
-        Text("+ 添加应用", color = accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Text("添加应用", color = accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -364,10 +404,13 @@ private fun ExpandAppsChip(
     val label = if (collapsed) "还有 $hiddenCount 个" else "收起"
     Row(
         modifier = Modifier
+            .fillMaxWidth()
+            .height(36.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(SurfaceChip)
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp, vertical = 6.dp),
+            .padding(horizontal = 10.dp),
+        horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(label, color = accent, fontSize = 12.sp, fontWeight = FontWeight.Medium)

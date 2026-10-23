@@ -6,17 +6,21 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -25,17 +29,24 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Forum
 import androidx.compose.material.icons.outlined.GridView
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +58,9 @@ import androidx.compose.runtime.setValue
 import kotlin.math.roundToInt
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -63,10 +77,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.liuji.xiaoqi.data.CategoryWithApps
 import com.liuji.xiaoqi.data.frame.FrameJson
 import com.liuji.xiaoqi.data.frame.FrameSearchHit
 import com.liuji.xiaoqi.data.frame.FrameTextNode
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
+import com.liuji.xiaoqi.ui.FrameSearchScope
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import com.liuji.xiaoqi.ui.theme.Accent
 import com.liuji.xiaoqi.ui.theme.AccentSoft
@@ -78,13 +94,19 @@ import com.liuji.xiaoqi.ui.theme.PageBackground
 import com.liuji.xiaoqi.ui.theme.Radius
 import com.liuji.xiaoqi.ui.theme.Scrim
 import com.liuji.xiaoqi.ui.theme.ShapeCanvas
+import com.liuji.xiaoqi.ui.theme.Success
 import com.liuji.xiaoqi.ui.theme.Space
 import com.liuji.xiaoqi.ui.theme.SurfaceMuted
 import com.liuji.xiaoqi.ui.theme.TextMuted
 import com.liuji.xiaoqi.ui.theme.TextStrong
+import android.widget.Toast
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 private val timeFmt = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
     .withZone(ZoneId.systemDefault())
@@ -92,8 +114,12 @@ private val timeFmt = DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
 private enum class FrameViewMode {
     CANVAS,
     DOCUMENT,
+    CHAT,
 }
 
+private const val FULL_DAY_END_MINUTE = 23 * 60 + 59
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FrameViewerScreen(
     appLabel: String,
@@ -102,7 +128,10 @@ fun FrameViewerScreen(
     index: Int,
     loading: Boolean,
     searchQuery: String,
-    searchInCurrentApp: Boolean,
+    searchScope: FrameSearchScope,
+    searchPackages: Set<String>,
+    searchCategories: List<CategoryWithApps>,
+    searchCategoriesLoading: Boolean,
     searchStrict: Boolean,
     searchHits: List<FrameSearchHit>,
     searchHitIndex: Int,
@@ -111,48 +140,134 @@ fun FrameViewerScreen(
     onBack: () -> Unit,
     onIndexChange: (Int) -> Unit,
     onSearchQueryChange: (String) -> Unit,
-    onSearchInCurrentAppChange: (Boolean) -> Unit,
+    onSearchScopeChange: (FrameSearchScope) -> Unit,
+    onPickSearchPackages: (Set<String>) -> Unit,
+    onLoadSearchCategories: () -> Unit,
     onSearchStrictChange: (Boolean) -> Unit,
     onRunSearch: () -> Unit,
     onJumpToSearchHit: (Int) -> Unit,
     onSearchPrev: () -> Unit,
     onSearchNext: () -> Unit,
+    onLoadDateFrames: (Long, Int, Int) -> Unit,
+    onReloadPeriodFrames: () -> Unit,
+    iconLoader: (String) -> android.graphics.drawable.Drawable?,
 ) {
-    BackHandler(onBack = onBack)
+    val copyText = rememberCopyAction()
+    val zone = ZoneId.systemDefault()
+    val isChatGpt = packageName == FrameJson.CHATGPT_PACKAGE
+    var filterEpochDay by rememberSaveable { mutableStateOf(-1L) }
+    var filterStartMinute by rememberSaveable { mutableStateOf(0) }
+    var filterEndMinute by rememberSaveable { mutableStateOf(FULL_DAY_END_MINUTE) }
+    val filtering = filterEpochDay >= 0L
+    val visibleIndices = remember(frames, filtering, filterEpochDay, filterStartMinute, filterEndMinute) {
+        if (!filtering) {
+            frames.indices.toList()
+        } else {
+            val startMinute = filterStartMinute.coerceIn(0, FULL_DAY_END_MINUTE)
+            val endMinute = filterEndMinute.coerceIn(startMinute, FULL_DAY_END_MINUTE)
+            frames.indices.filter { index ->
+                val local = Instant.ofEpochMilli(frames[index].capturedAt).atZone(zone).toLocalDateTime()
+                local.toLocalDate().toEpochDay() == filterEpochDay &&
+                    local.hour * 60 + local.minute in startMinute..endMinute
+            }
+        }
+    }
     val safeIndex = index.coerceIn(0, (frames.size - 1).coerceAtLeast(0))
     val frame = frames.getOrNull(safeIndex)
+    val visiblePos = visibleIndices.indexOf(safeIndex)
+    LaunchedEffect(visibleIndices, index) {
+        if (visibleIndices.isNotEmpty() && index !in visibleIndices) {
+            onIndexChange(visibleIndices.first())
+        }
+    }
+    fun stepVisible(delta: Int) {
+        val pos = visibleIndices.indexOf(safeIndex)
+        if (pos < 0) return
+        val next = pos + delta
+        if (next !in visibleIndices.indices) return
+        onIndexChange(visibleIndices[next])
+    }
     var dragAcc by remember { mutableFloatStateOf(0f) }
-    var showDesc by remember(safeIndex) { mutableStateOf(false) }
+    var showDesc by rememberSaveable { mutableStateOf(false) }
     var fullTextNode by remember { mutableStateOf<FrameTextNode?>(null) }
+    var docSelecting by remember { mutableStateOf(false) }
+    var docSelected by remember { mutableStateOf(setOf<Int>()) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var showSearchDialog by remember { mutableStateOf(false) }
+    var showAppPicker by remember { mutableStateOf(false) }
     var viewMode by rememberSaveable { mutableStateOf(FrameViewMode.CANVAS) }
-
-    // 有结果时自动关闭对话框（ViewModel 已跳转到首条命中帧）
-    LaunchedEffect(searchLoading, searchHits.size) {
-        if (!searchLoading && searchHits.isNotEmpty() && showSearchDialog) {
-            showSearchDialog = false
+    var nonChatMode by rememberSaveable { mutableStateOf(FrameViewMode.CANVAS) }
+    LaunchedEffect(isChatGpt) {
+        if (!isChatGpt && viewMode == FrameViewMode.CHAT) {
+            viewMode = FrameViewMode.CANVAS
+        }
+    }
+    LaunchedEffect(frame?.id, viewMode) {
+        docSelecting = false
+        docSelected = emptySet()
+    }
+    BackHandler {
+        if (docSelecting) {
+            docSelecting = false
+            docSelected = emptySet()
+        } else {
+            onBack()
         }
     }
 
     if (showSearchDialog) {
         FrameSearchDialog(
             query = searchQuery,
-            inCurrentApp = searchInCurrentApp,
+            searchScope = searchScope,
+            pickedCount = searchPackages.size,
             strict = searchStrict,
             hits = searchHits,
             hitIndex = searchHitIndex,
             loading = searchLoading,
             message = searchMessage,
+            filterEpochDay = filterEpochDay,
+            filterStartMinute = filterStartMinute,
+            filterEndMinute = filterEndMinute,
             onQueryChange = onSearchQueryChange,
-            onInCurrentAppChange = onSearchInCurrentAppChange,
+            onScopeCurrent = { onSearchScopeChange(FrameSearchScope.CURRENT) },
+            onScopeAll = { onSearchScopeChange(FrameSearchScope.ALL) },
+            onOpenAppPicker = {
+                onLoadSearchCategories()
+                showAppPicker = true
+            },
             onStrictChange = onSearchStrictChange,
             onSearch = onRunSearch,
+            onApplyDateFilter = { day, startMinute, endMinute ->
+                filterEpochDay = day
+                filterStartMinute = startMinute
+                filterEndMinute = endMinute
+                onLoadDateFrames(day, startMinute, endMinute)
+            },
+            onClearDateFilter = {
+                filterEpochDay = -1L
+                filterStartMinute = 0
+                filterEndMinute = FULL_DAY_END_MINUTE
+                onReloadPeriodFrames()
+            },
             onJump = { i ->
                 onJumpToSearchHit(i)
                 showSearchDialog = false
             },
             onDismiss = { showSearchDialog = false },
+        )
+    }
+
+    if (showAppPicker) {
+        FrameAppScopePicker(
+            categories = searchCategories,
+            loading = searchCategoriesLoading,
+            initialSelected = searchPackages,
+            iconLoader = iconLoader,
+            onDismiss = { showAppPicker = false },
+            onConfirm = { packages ->
+                if (packages.isNotEmpty()) onPickSearchPackages(packages)
+                showAppPicker = false
+            },
         )
     }
 
@@ -182,8 +297,19 @@ fun FrameViewerScreen(
                 }
             },
             confirmButton = {
+                TextButton(
+                    onClick = {
+                        copyText(fullTextCopy(node))
+                        fullTextNode = null
+                    },
+                    enabled = node.hasText() || node.hasDesc(),
+                ) {
+                    Text("复制", color = Accent)
+                }
+            },
+            dismissButton = {
                 TextButton(onClick = { fullTextNode = null }) {
-                    Text("关闭", color = Accent)
+                    Text("关闭", color = TextMuted)
                 }
             },
         )
@@ -197,7 +323,7 @@ fun FrameViewerScreen(
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = Space.sm, vertical = Space.sm),
         ) {
             IconButton(onClick = onBack) {
                 Icon(
@@ -212,26 +338,42 @@ fun FrameViewerScreen(
             }
             IconButton(
                 onClick = {
-                    viewMode = if (viewMode == FrameViewMode.CANVAS) {
+                    val next = if (nonChatMode == FrameViewMode.CANVAS) {
                         FrameViewMode.DOCUMENT
                     } else {
                         FrameViewMode.CANVAS
                     }
+                    nonChatMode = next
+                    viewMode = next
                 },
             ) {
+                val showingDocument = (if (viewMode == FrameViewMode.CHAT) nonChatMode else viewMode) ==
+                    FrameViewMode.DOCUMENT
                 Icon(
-                    imageVector = if (viewMode == FrameViewMode.DOCUMENT) {
+                    imageVector = if (showingDocument) {
                         Icons.Outlined.GridView
                     } else {
                         Icons.AutoMirrored.Outlined.Article
                     },
-                    contentDescription = if (viewMode == FrameViewMode.DOCUMENT) {
+                    contentDescription = if (showingDocument) {
                         "切换画面视图"
                     } else {
                         "切换文档视图"
                     },
                     tint = Accent,
                 )
+            }
+            if (isChatGpt) {
+                val inChat = viewMode == FrameViewMode.CHAT
+                IconButton(onClick = {
+                    viewMode = if (inChat) nonChatMode else FrameViewMode.CHAT
+                }) {
+                    Icon(
+                        Icons.Outlined.Forum,
+                        contentDescription = if (inChat) "退出对话视图" else "对话视图",
+                        tint = if (inChat) Accent else TextStrong,
+                    )
+                }
             }
             IconButton(onClick = { showSearchDialog = true }) {
                 Icon(Icons.Outlined.Search, contentDescription = "搜索画面", tint = Accent)
@@ -243,7 +385,7 @@ fun FrameViewerScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 8.dp),
+                    .padding(horizontal = Space.sm),
             ) {
                 IconButton(
                     onClick = onSearchPrev,
@@ -287,6 +429,22 @@ fun FrameViewerScreen(
                 }
             }
 
+            visibleIndices.isEmpty() -> {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("该时间范围内没有画面", color = TextMuted)
+                        TextButton(onClick = {
+                            filterEpochDay = -1L
+                            filterStartMinute = 0
+                            filterEndMinute = FULL_DAY_END_MINUTE
+                            onReloadPeriodFrames()
+                        }) {
+                            Text("清除筛选", color = Accent)
+                        }
+                    }
+                }
+            }
+
             frame != null -> {
                 val frameHasAnyText = frame.hasAnyText
                 val q = searchQuery.trim()
@@ -304,41 +462,49 @@ fun FrameViewerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
+                        .padding(horizontal = Space.md),
                 ) {
                     IconButton(
-                        onClick = { onIndexChange(safeIndex - 1) },
-                        enabled = safeIndex > 0,
+                        onClick = { stepVisible(-1) },
+                        enabled = visiblePos > 0,
                     ) {
                         Icon(Icons.Outlined.ChevronLeft, contentDescription = "上一张")
                     }
                     Text(
-                        text = "${safeIndex + 1} / ${frames.size}  ·  ${timeFmt.format(Instant.ofEpochMilli(frame.capturedAt))}",
+                        text = buildString {
+                            val pos = if (visiblePos >= 0) visiblePos + 1 else 1
+                            val total = visibleIndices.size
+                            append("$pos / $total")
+                            if (filtering) append("（已筛选）")
+                            append("  ·  ")
+                            append(timeFmt.format(Instant.ofEpochMilli(frame.capturedAt)))
+                        },
                         color = TextMuted,
                         fontSize = 12.sp,
                         modifier = Modifier.weight(1f),
                     )
                     IconButton(
-                        onClick = { onIndexChange(safeIndex + 1) },
-                        enabled = safeIndex < frames.lastIndex,
+                        onClick = { stepVisible(1) },
+                        enabled = visiblePos in 0 until visibleIndices.lastIndex,
                     ) {
                         Icon(Icons.Outlined.ChevronRight, contentDescription = "下一张")
                     }
                 }
-                if (frames.size > 1) {
-                    var sliderValue by remember(safeIndex) { mutableFloatStateOf(safeIndex.toFloat()) }
-                    LaunchedEffect(safeIndex) {
-                        sliderValue = safeIndex.toFloat()
+                if (visibleIndices.size > 1 && visiblePos >= 0) {
+                    var sliderValue by remember(visiblePos) { mutableFloatStateOf(visiblePos.toFloat()) }
+                    LaunchedEffect(visiblePos) {
+                        sliderValue = visiblePos.toFloat()
                     }
                     Slider(
                         value = sliderValue,
                         onValueChange = { v ->
                             sliderValue = v
-                            val next = v.roundToInt().coerceIn(0, frames.lastIndex)
-                            if (next != safeIndex) onIndexChange(next)
+                            val next = v.roundToInt().coerceIn(0, visibleIndices.lastIndex)
+                            val target = visibleIndices[next]
+                            if (target != safeIndex) onIndexChange(target)
                         },
-                        valueRange = 0f..frames.lastIndex.toFloat(),
-                        steps = (frames.size - 2).coerceAtLeast(0),
+                        valueRange = 0f..visibleIndices.lastIndex.toFloat(),
+                        steps = (visibleIndices.size - 2).coerceAtLeast(0),
                         colors = SliderDefaults.colors(
                             thumbColor = Accent,
                             activeTrackColor = Accent,
@@ -353,19 +519,23 @@ fun FrameViewerScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = Space.sm),
+                        .padding(horizontal = Space.md),
                 ) {
                     Text(
                         text = buildString {
-                            if (viewMode == FrameViewMode.DOCUMENT) {
-                                append("文档视图 · 按位置从上到下、从左到右")
-                                if (!frameHasAnyText) append(" · 无界面文字，已显示说明")
-                                else if (showDesc) append(" · 已显示说明文字")
-                            } else {
-                                append("文字块 ${frame.texts.size}")
-                                if (!frameHasAnyText) append(" · 无界面文字，已显示说明")
-                                else if (showDesc) append(" · 已显示说明文字")
-                                append(" · 点击看全文 · 左右滑动切换")
+                            when (viewMode) {
+                                FrameViewMode.CHAT -> append("对话视图 · 蓝为用户 · 绿为 AI · 灰为未分类")
+                                FrameViewMode.DOCUMENT -> {
+                                    append("文档视图 · 按位置从上到下、从左到右")
+                                    if (!frameHasAnyText) append(" · 无界面文字，已显示说明")
+                                    else if (showDesc) append(" · 已显示说明文字")
+                                }
+                                FrameViewMode.CANVAS -> {
+                                    append("文字块 ${frame.texts.size}")
+                                    if (!frameHasAnyText) append(" · 无界面文字，已显示说明")
+                                    else if (showDesc) append(" · 已显示说明文字")
+                                    append(" · 点击看全文 · 左右滑动切换")
+                                }
                             }
                         },
                         color = TextMuted,
@@ -374,7 +544,7 @@ fun FrameViewerScreen(
                             .weight(1f)
                             .padding(horizontal = Space.sm),
                     )
-                    if (frameHasAnyText && hasAnyDesc) {
+                    if (viewMode != FrameViewMode.CHAT && frameHasAnyText && hasAnyDesc) {
                         TextButton(onClick = { showDesc = !showDesc }) {
                             Text(
                                 if (showDesc) "收起" else "更多",
@@ -385,7 +555,20 @@ fun FrameViewerScreen(
                     }
                 }
 
-                if (viewMode == FrameViewMode.DOCUMENT) {
+                if (viewMode == FrameViewMode.CHAT) {
+                    val chatFrames = remember(frames, visibleIndices) {
+                        visibleIndices.map { frames[it] }
+                    }
+                    ChatTranscriptView(
+                        frames = chatFrames,
+                        anchorFrameId = frame.id,
+                        anchorCapturedAt = frame.capturedAt,
+                        onLineClick = { fullTextNode = it },
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(Space.md),
+                    )
+                } else if (viewMode == FrameViewMode.DOCUMENT) {
                     FrameDocumentView(
                         frame = frame,
                         highlightActive = highlightActive,
@@ -393,16 +576,36 @@ fun FrameViewerScreen(
                         searchStrict = searchStrict,
                         showDesc = effectiveShowDesc,
                         frameHasAnyText = frameHasAnyText,
+                        selecting = docSelecting,
+                        selected = docSelected,
+                        onStartSelect = { lineIndex ->
+                            docSelecting = true
+                            docSelected = setOf(lineIndex)
+                        },
+                        onToggleSelect = { lineIndex ->
+                            val next = if (lineIndex in docSelected) {
+                                docSelected - lineIndex
+                            } else {
+                                docSelected + lineIndex
+                            }
+                            docSelected = next
+                            if (next.isEmpty()) docSelecting = false
+                        },
                         onLineClick = { fullTextNode = it },
+                        onCopySelection = { text -> copyText(text) },
+                        onCancelSelection = {
+                            docSelecting = false
+                            docSelected = emptySet()
+                        },
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(Space.md)
-                            .pointerInput(frames, safeIndex) {
+                            .pointerInput(frames, safeIndex, visibleIndices) {
                                 detectHorizontalDragGestures(
                                     onDragEnd = {
                                         when {
-                                            dragAcc > 80f -> onIndexChange(safeIndex - 1)
-                                            dragAcc < -80f -> onIndexChange(safeIndex + 1)
+                                            dragAcc > 80f -> stepVisible(-1)
+                                            dragAcc < -80f -> stepVisible(1)
                                         }
                                         dragAcc = 0f
                                     },
@@ -457,8 +660,8 @@ fun FrameViewerScreen(
                                 detectHorizontalDragGestures(
                                     onDragEnd = {
                                         when {
-                                            dragAcc > 80f -> onIndexChange(safeIndex - 1)
-                                            dragAcc < -80f -> onIndexChange(safeIndex + 1)
+                                            dragAcc > 80f -> stepVisible(-1)
+                                            dragAcc < -80f -> stepVisible(1)
                                         }
                                         dragAcc = 0f
                                     },
@@ -521,23 +724,64 @@ private fun FrameDocumentView(
     searchStrict: Boolean,
     showDesc: Boolean,
     frameHasAnyText: Boolean,
+    selecting: Boolean,
+    selected: Set<Int>,
+    onStartSelect: (Int) -> Unit,
+    onToggleSelect: (Int) -> Unit,
     onLineClick: (FrameTextNode) -> Unit,
+    onCopySelection: (String) -> Unit,
+    onCancelSelection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val lines = remember(frame, highlightActive, query, searchStrict, showDesc, frameHasAnyText) {
         buildDocumentLines(frame, highlightActive, query, searchStrict, showDesc, frameHasAnyText)
     }
-    Box(
+    Column(
         modifier = modifier
             .clip(ShapeCanvas)
             .background(CardBackground),
     ) {
+        if (selecting) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = Space.sm),
+            ) {
+                Text(
+                    "已选 ${selected.size}",
+                    color = TextStrong,
+                    fontSize = 13.sp,
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    onClick = {
+                        val text = lines
+                            .filterIndexed { i, _ -> i in selected }
+                            .joinToString("\n") { it.text }
+                        if (text.isNotBlank()) onCopySelection(text)
+                    },
+                    enabled = selected.isNotEmpty(),
+                ) {
+                    Text("复制", color = Accent)
+                }
+                TextButton(onClick = onCancelSelection) {
+                    Text("取消", color = TextMuted)
+                }
+            }
+        }
         if (lines.isEmpty()) {
             Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text("本帧无可显示文字", color = TextMuted, fontSize = 14.sp)
             }
         } else {
+            val listState = rememberLazyListState()
+            LaunchedEffect(frame.id, lines) {
+                val index = lines.indexOfFirst { it.matched }
+                if (index >= 0) listState.scrollToItem(index)
+            }
             LazyColumn(
+                state = listState,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(horizontal = Space.md, vertical = Space.sm),
@@ -546,18 +790,30 @@ private fun FrameDocumentView(
                 itemsIndexed(
                     items = lines,
                     key = { index, line -> "${index}_${line.node.left}_${line.node.top}_${line.text.hashCode()}" },
-                ) { _, line ->
+                ) { lineIndex, line ->
+                    val picked = lineIndex in selected
                     Text(
                         text = line.text,
-                        color = if (line.matched) Accent else TextStrong,
+                        color = if (line.matched || picked) Accent else TextStrong,
                         fontSize = 15.sp,
                         lineHeight = 22.sp,
-                        fontWeight = if (line.matched) FontWeight.SemiBold else FontWeight.Normal,
+                        fontWeight = if (line.matched || picked) FontWeight.SemiBold else FontWeight.Normal,
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(Radius.sm))
-                            .background(if (line.matched) HighlightFill else Color.Transparent)
-                            .clickable { onLineClick(line.node) }
+                            .background(
+                                when {
+                                    picked -> AccentSoft
+                                    line.matched -> HighlightFill
+                                    else -> Color.Transparent
+                                },
+                            )
+                            .combinedClickable(
+                                onClick = {
+                                    if (selecting) onToggleSelect(lineIndex) else onLineClick(line.node)
+                                },
+                                onLongClick = { onStartSelect(lineIndex) },
+                            )
                             .padding(horizontal = Space.xs, vertical = Space.xs),
                     )
                 }
@@ -596,22 +852,46 @@ private fun buildDocumentLines(
         .sortedWith(compareBy({ it.node.top }, { it.node.left }))
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun FrameSearchDialog(
     query: String,
-    inCurrentApp: Boolean,
+    searchScope: FrameSearchScope,
+    pickedCount: Int,
     strict: Boolean,
     hits: List<FrameSearchHit>,
     hitIndex: Int,
     loading: Boolean,
     message: String?,
+    filterEpochDay: Long,
+    filterStartMinute: Int,
+    filterEndMinute: Int,
     onQueryChange: (String) -> Unit,
-    onInCurrentAppChange: (Boolean) -> Unit,
+    onScopeCurrent: () -> Unit,
+    onScopeAll: () -> Unit,
+    onOpenAppPicker: () -> Unit,
     onStrictChange: (Boolean) -> Unit,
     onSearch: () -> Unit,
+    onApplyDateFilter: (Long, Int, Int) -> Unit,
+    onClearDateFilter: () -> Unit,
     onJump: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val dateFmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd") }
+    var draftDate by remember(filterEpochDay) {
+        mutableStateOf(
+            if (filterEpochDay >= 0L) LocalDate.ofEpochDay(filterEpochDay) else LocalDate.now(),
+        )
+    }
+    var minuteRange by remember(filterEpochDay, filterStartMinute, filterEndMinute) {
+        val start = if (filterEpochDay >= 0L) filterStartMinute else 0
+        val end = if (filterEpochDay >= 0L) filterEndMinute else FULL_DAY_END_MINUTE
+        mutableStateOf(start.toFloat()..end.coerceAtLeast(start).toFloat())
+    }
+    var pickingDate by remember { mutableStateOf(false) }
+    var showDateFilter by remember { mutableStateOf(false) }
+    val startMinute = minuteRange.start.toInt().coerceIn(0, FULL_DAY_END_MINUTE)
+    val endMinute = minuteRange.endInclusive.toInt().coerceIn(startMinute, FULL_DAY_END_MINUTE)
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = CardBackground,
@@ -622,7 +902,7 @@ private fun FrameSearchDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 420.dp)
+                    .heightIn(max = 520.dp)
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
@@ -648,15 +928,25 @@ private fun FrameSearchDialog(
                     ),
                 )
                 Text("范围", color = TextMuted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    verticalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
                     FilterChip(
-                        selected = inCurrentApp,
-                        onClick = { onInCurrentAppChange(true) },
+                        selected = searchScope == FrameSearchScope.CURRENT,
+                        onClick = onScopeCurrent,
                         label = { Text("仅当前应用") },
                     )
                     FilterChip(
-                        selected = !inCurrentApp,
-                        onClick = { onInCurrentAppChange(false) },
+                        selected = searchScope == FrameSearchScope.PICKED,
+                        onClick = onOpenAppPicker,
+                        label = {
+                            Text(if (pickedCount > 0) "多个应用 · $pickedCount" else "多个应用")
+                        },
+                    )
+                    FilterChip(
+                        selected = searchScope == FrameSearchScope.ALL,
+                        onClick = onScopeAll,
                         label = { Text("全部应用") },
                     )
                 }
@@ -671,6 +961,17 @@ private fun FrameSearchDialog(
                         selected = strict,
                         onClick = { onStrictChange(true) },
                         label = { Text("精确") },
+                    )
+                }
+                TextButton(onClick = { showDateFilter = true }) {
+                    Text(
+                        text = if (filterEpochDay >= 0L) {
+                            "日期筛选 · ${LocalDate.ofEpochDay(filterEpochDay).format(dateFmt)} " +
+                                "${formatMinute(filterStartMinute)}–${formatMinute(filterEndMinute)}"
+                        } else {
+                            "日期筛选"
+                        },
+                        color = Accent,
                     )
                 }
                 if (loading) {
@@ -699,7 +1000,7 @@ private fun FrameSearchDialog(
                             Text(
                                 text = buildString {
                                     append(timeFmt.format(Instant.ofEpochMilli(hit.capturedAt)))
-                                    if (!inCurrentApp) {
+                                    if (searchScope != FrameSearchScope.CURRENT) {
                                         append(" · ")
                                         append(hit.appLabel.ifBlank { hit.packageName })
                                     }
@@ -730,6 +1031,84 @@ private fun FrameSearchDialog(
             }
         },
     )
+    if (showDateFilter) {
+        AlertDialog(
+            onDismissRequest = { showDateFilter = false },
+            containerColor = CardBackground,
+            titleContentColor = TextStrong,
+            textContentColor = TextStrong,
+            title = { Text("日期筛选", color = TextStrong) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    Text(
+                        "只选一天。滑块贴在两端表示该日全部时间。",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                    )
+                    TextButton(onClick = { pickingDate = true }) {
+                        Text("日期 ${draftDate.format(dateFmt)}", color = TextStrong)
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(formatMinute(startMinute), color = Accent, fontSize = 13.sp)
+                        Text(formatMinute(endMinute), color = Accent, fontSize = 13.sp)
+                    }
+                    RangeSlider(
+                        value = minuteRange,
+                        onValueChange = { next ->
+                            val start = next.start.toInt().coerceIn(0, FULL_DAY_END_MINUTE)
+                            val end = next.endInclusive.toInt().coerceIn(start, FULL_DAY_END_MINUTE)
+                            minuteRange = start.toFloat()..end.toFloat()
+                        },
+                        valueRange = 0f..FULL_DAY_END_MINUTE.toFloat(),
+                        colors = SliderDefaults.colors(
+                            thumbColor = Accent,
+                            activeTrackColor = Accent,
+                            inactiveTrackColor = AccentSoft,
+                        ),
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    onApplyDateFilter(draftDate.toEpochDay(), startMinute, endMinute)
+                    showDateFilter = false
+                    onDismiss()
+                }) {
+                    Text("确定", color = Accent)
+                }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(
+                        onClick = {
+                            onClearDateFilter()
+                            showDateFilter = false
+                            onDismiss()
+                        },
+                        enabled = filterEpochDay >= 0L,
+                    ) {
+                        Text("清除", color = TextMuted)
+                    }
+                    TextButton(onClick = { showDateFilter = false }) {
+                        Text("取消", color = TextMuted)
+                    }
+                }
+            },
+        )
+    }
+    if (pickingDate) {
+        FrameDatePickerDialog(
+            initial = draftDate,
+            onDismiss = { pickingDate = false },
+            onConfirm = { picked ->
+                draftDate = picked
+                pickingDate = false
+            },
+        )
+    }
 }
 
 private fun fieldMatches(field: String, query: String, strict: Boolean): Boolean {
@@ -825,3 +1204,182 @@ private fun computeFrameLayout(
     }
     return FrameHitLayout(regions, drawItems, scale, ox, oy, sw, sh)
 }
+
+private fun fullTextCopy(node: FrameTextNode): String = buildString {
+    if (node.hasText()) append(node.text.trim())
+    if (node.hasDesc()) {
+        if (isNotEmpty()) append('\n')
+        append(node.desc.trim())
+    }
+}
+
+@Composable
+private fun rememberCopyAction(): (String) -> Unit {
+    val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    return { text ->
+        if (text.isNotBlank()) {
+            clipboard.setText(AnnotatedString(text))
+            Toast.makeText(context, "已复制", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
+
+private fun formatMinute(minute: Int): String {
+    val value = minute.coerceIn(0, FULL_DAY_END_MINUTE)
+    return "%02d:%02d".format(value / 60, value % 60)
+}
+
+private enum class ChatRole { USER, AI, OTHER }
+
+private data class ChatLine(
+    val text: String,
+    val role: ChatRole,
+    val node: FrameTextNode,
+    val frameId: Long,
+    val capturedAt: Long,
+)
+
+private fun chatRole(className: String): ChatRole = when (className) {
+    FrameJson.CHATGPT_USER_CLASS -> ChatRole.USER
+    FrameJson.CHATGPT_AI_CLASS -> ChatRole.AI
+    else -> ChatRole.OTHER
+}
+
+private fun buildChatLines(frames: List<UiFrameSnapshot>): List<ChatLine> {
+    val raw = ArrayList<ChatLine>()
+    for (frame in frames.sortedBy { it.capturedAt }) {
+        val nodes = frame.texts.sortedWith(compareBy({ it.top }, { it.left }))
+        for (node in nodes) {
+            val text = node.text.trim()
+            if (text.isEmpty()) continue
+            raw += ChatLine(
+                text = text,
+                role = chatRole(node.className),
+                node = node,
+                frameId = frame.id,
+                capturedAt = frame.capturedAt,
+            )
+        }
+    }
+    val adjacent = ArrayList<ChatLine>(raw.size)
+    for (line in raw) {
+        val last = adjacent.lastOrNull()
+        if (last != null && last.role == line.role && line.text.contains(last.text)) {
+            adjacent[adjacent.lastIndex] = line
+        } else {
+            adjacent += line
+        }
+    }
+    val kept = ArrayList<ChatLine>(adjacent.size)
+    for (line in adjacent) {
+        kept.removeAll { existing ->
+            existing.role == line.role &&
+                existing.text.length <= line.text.length &&
+                line.text.contains(existing.text)
+        }
+        kept += line
+    }
+    return kept
+}
+
+@Composable
+private fun ChatTranscriptView(
+    frames: List<UiFrameSnapshot>,
+    anchorFrameId: Long,
+    anchorCapturedAt: Long,
+    onLineClick: (FrameTextNode) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var lines by remember { mutableStateOf<List<ChatLine>?>(null) }
+    val listState = rememberLazyListState()
+    LaunchedEffect(frames) {
+        lines = null
+        lines = withContext(Dispatchers.Default) { buildChatLines(frames) }
+    }
+    val readyLines = lines
+    LaunchedEffect(anchorFrameId, anchorCapturedAt, readyLines) {
+        val current = readyLines ?: return@LaunchedEffect
+        if (current.isEmpty()) return@LaunchedEffect
+        val exact = current.indexOfFirst { it.frameId == anchorFrameId }
+        val target = if (exact >= 0) {
+            exact
+        } else {
+            val later = current.indexOfFirst { it.capturedAt >= anchorCapturedAt }
+            if (later >= 0) later else current.lastIndex
+        }
+        if (target >= 0) listState.scrollToItem(target)
+    }
+    if (readyLines == null) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text("正在整理对话…", color = TextMuted)
+        }
+        return
+    }
+    if (readyLines.isEmpty()) {
+        Box(modifier, contentAlignment = Alignment.Center) {
+            Text("该范围内没有可合并的界面文字", color = TextMuted)
+        }
+        return
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(Space.sm),
+    ) {
+        itemsIndexed(readyLines, key = { index, _ -> index }) { _, line ->
+            val color = when (line.role) {
+                ChatRole.USER -> Accent
+                ChatRole.AI -> Success
+                ChatRole.OTHER -> TextMuted
+            }
+            val label = when (line.role) {
+                ChatRole.USER -> "用户"
+                ChatRole.AI -> "AI"
+                ChatRole.OTHER -> "未分类"
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(Radius.sm))
+                    .background(SurfaceMuted)
+                    .clickable { onLineClick(line.node) }
+                    .padding(Space.sm),
+            ) {
+                Text(label, color = color, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                Text(line.text, color = color, fontSize = 14.sp)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FrameDatePickerDialog(
+    initial: LocalDate,
+    onDismiss: () -> Unit,
+    onConfirm: (LocalDate) -> Unit,
+) {
+    val today = LocalDate.now()
+    val initialMillis = initial.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    val maxMillis = today.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = initialMillis,
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis <= maxMillis
+        },
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                val millis = state.selectedDateMillis ?: return@TextButton
+                onConfirm(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate())
+            }) { Text("确定") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+    ) {
+        DatePicker(state = state)
+    }
+}
+

@@ -74,6 +74,9 @@ interface UsageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertCategory(item: UserCategoryEntity)
 
+    @Query("UPDATE user_categories SET color = :color WHERE id = :id AND builtin = 1")
+    suspend fun updateBuiltinCategoryColor(id: String, color: String)
+
     @Query("SELECT * FROM user_categories ORDER BY sort_order ASC, name ASC")
     suspend fun getAllCategories(): List<UserCategoryEntity>
 
@@ -149,6 +152,15 @@ interface UsageDao {
     @Query(
         """
         SELECT * FROM ui_frames
+        WHERE package_name IN (:packages)
+        ORDER BY captured_at ASC
+        """,
+    )
+    suspend fun getFramesForPackages(packages: List<String>): List<UiFrameEntity>
+
+    @Query(
+        """
+        SELECT * FROM ui_frames
         ORDER BY captured_at ASC
         """,
     )
@@ -207,8 +219,23 @@ interface UsageDao {
 
     // ── frame blacklist ──
 
-    @Query("SELECT * FROM frame_blacklist WHERE user_exempt = 0 ORDER BY label ASC")
+    @Query(
+        """
+        SELECT * FROM frame_blacklist
+        WHERE user_exempt = 0 AND pending = 0
+        ORDER BY label ASC
+        """,
+    )
     suspend fun getActiveFrameBlacklist(): List<FrameBlacklistEntity>
+
+    @Query(
+        """
+        SELECT * FROM frame_blacklist
+        WHERE user_exempt = 0 AND pending = 1
+        ORDER BY label ASC
+        """,
+    )
+    suspend fun getPendingFrameBlacklist(): List<FrameBlacklistEntity>
 
     @Query("SELECT package_name FROM frame_blacklist WHERE user_exempt = 1")
     suspend fun getExemptFrameBlacklistPackages(): List<String>

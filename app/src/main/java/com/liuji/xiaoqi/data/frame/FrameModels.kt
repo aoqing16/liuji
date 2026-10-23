@@ -34,6 +34,8 @@ data class FrameTextNode(
     val depth: Int,
     /** 采集时节点包名；入库按帧级 package_name，json 可不写 */
     val packageName: String = "",
+    /** 仅 ChatGPT 写入，用于区分用户输入与 AI 回答 */
+    val className: String = "",
 ) {
     val width: Int get() = (right - left).coerceAtLeast(0)
     val height: Int get() = (bottom - top).coerceAtLeast(0)
@@ -68,6 +70,9 @@ data class FrameSearchHit(
 object FrameJson {
     /** 闲鱼仍导出 desc；其他应用只导出可见 text */
     const val XIANYU_PACKAGE = "com.taobao.idlefish"
+    const val CHATGPT_PACKAGE = "com.openai.chatgpt"
+    const val CHATGPT_USER_CLASS = "android.view.View"
+    const val CHATGPT_AI_CLASS = "android.widget.TextView"
 
     fun includeDescForPackage(packageName: String): Boolean =
         packageName == XIANYU_PACKAGE
@@ -75,16 +80,16 @@ object FrameJson {
     fun textsToJson(texts: List<FrameTextNode>): String {
         val arr = JSONArray()
         texts.forEach { n ->
-            arr.put(
-                JSONObject()
-                    .put("text", n.text)
-                    .put("desc", n.desc)
-                    .put("left", n.left)
-                    .put("top", n.top)
-                    .put("right", n.right)
-                    .put("bottom", n.bottom)
-                    .put("depth", n.depth),
-            )
+            val o = JSONObject()
+                .put("text", n.text)
+                .put("desc", n.desc)
+                .put("left", n.left)
+                .put("top", n.top)
+                .put("right", n.right)
+                .put("bottom", n.bottom)
+                .put("depth", n.depth)
+            if (n.className.isNotBlank()) o.put("className", n.className)
+            arr.put(o)
         }
         return arr.toString()
     }
@@ -103,6 +108,7 @@ object FrameJson {
                 right = o.optInt("right"),
                 bottom = o.optInt("bottom"),
                 depth = o.optInt("depth"),
+                className = o.optString("className"),
             )
         }
         return out
@@ -228,9 +234,7 @@ object FrameJson {
     }
 
     fun isSparseText(texts: List<FrameTextNode>): Boolean {
-        val nodes = texts.filter { it.hasText() || it.hasDesc() }
-        if (nodes.size <= 2) return true
-        val chars = nodes.sumOf { it.text.trim().length + it.desc.trim().length }
+        val chars = texts.sumOf { it.text.trim().length + it.desc.trim().length }
         return chars < 8
     }
 

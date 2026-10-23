@@ -12,6 +12,7 @@ import android.text.TextUtils
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import com.liuji.xiaoqi.data.frame.FrameJson
 import com.liuji.xiaoqi.data.frame.FrameTextNode
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
 import com.liuji.xiaoqi.frame.FrameRecorderService
@@ -193,6 +194,11 @@ class SelectToSpeakService : AccessibilityService() {
                         .ifBlank { "unknown" }
                     seenPkgs += pkg
                     val bucket = byPkg.getOrPut(pkg) { ArrayList() }
+                    val className = if (pkg == FrameJson.CHATGPT_PACKAGE) {
+                        node.className?.toString().orEmpty()
+                    } else {
+                        ""
+                    }
                     bucket += FrameTextNode(
                         text = text,
                         desc = desc,
@@ -202,6 +208,7 @@ class SelectToSpeakService : AccessibilityService() {
                         bottom = bounds.bottom,
                         depth = depth,
                         packageName = pkg,
+                        className = className,
                     )
                 }
             }

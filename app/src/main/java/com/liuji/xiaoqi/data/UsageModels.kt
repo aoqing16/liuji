@@ -16,16 +16,16 @@ data class AppCategory(
 )
 
 object Categories {
-    val Social = AppCategory("social", "社交", Color(0xFF6FCF97))
-    val Browse = AppCategory("browse", "浏览", Color(0xFF5B9BD5))
-    val Video = AppCategory("video", "影音", Color(0xFF6B5B95))
-    val Game = AppCategory("game", "游戏", Color(0xFFE88B9A))
-    val Work = AppCategory("work", "办公", Color(0xFFF0B429))
-    val Comm = AppCategory("comm", "工作沟通", Color(0xFF4ECDC4))
-    val Shop = AppCategory("shop", "购物", Color(0xFFFF8A65))
-    val Tool = AppCategory("tool", "工具", Color(0xFF8B7CF8))
-    val System = AppCategory("system", "系统", Color(0xFF9CA3AF))
-    val Other = AppCategory("other", "其他", Color(0xFFB0B7C3))
+    val Social = AppCategory("social", "社交", Color(0xFF10B981))
+    val Browse = AppCategory("browse", "浏览", Color(0xFF3B82F6))
+    val Video = AppCategory("video", "影音", Color(0xFF8B5CF6))
+    val Game = AppCategory("game", "游戏", Color(0xFFEC4899))
+    val Work = AppCategory("work", "办公", Color(0xFFF59E0B))
+    val Comm = AppCategory("comm", "工作沟通", Color(0xFF14B8A6))
+    val Shop = AppCategory("shop", "购物", Color(0xFFF97316))
+    val Tool = AppCategory("tool", "工具", Color(0xFF6366F1))
+    val System = AppCategory("system", "系统", Color(0xFF64748B))
+    val Other = AppCategory("other", "其他", Color(0xFF94A3B8))
 
     val all: List<AppCategory> = listOf(
         Social, Browse, Video, Game, Work, Comm, Shop, Tool, System, Other,

@@ -664,6 +664,13 @@ class UsageRepository(private val context: Context) {
         return dao.getFramesForPackage(packageName, startMillis, endMillis).map { it.toSnapshot() }
     }
 
+    suspend fun loadFramesForPackageBetween(
+        packageName: String,
+        startMillis: Long,
+        endMillisExclusive: Long,
+    ): List<UiFrameSnapshot> =
+        dao.getFramesForPackage(packageName, startMillis, endMillisExclusive).map { it.toSnapshot() }
+
     /** 与 [loadSummary] 同一时间窗的全部帧（小窗可用；周/月导出请用 [loadExportFrameTexts]） */
     suspend fun loadFramesForPeriod(period: StatsPeriod, offset: Int): List<UiFrameSnapshot> {
         val today = LocalDate.now(zoneId)
@@ -786,19 +793,20 @@ class UsageRepository(private val context: Context) {
         dao.getFramesForPackageAllTime(packageName).map { it.toSnapshot() }
 
     /**
-     * @param scopePackage 非空则只搜该包；null 为全局整库
+     * @param scopePackages null 为全局；非空则只搜这些包
      * @param strict true=区分大小写 contains；false=不区分大小写 contains
      */
     suspend fun searchFrames(
         query: String,
-        scopePackage: String?,
+        scopePackages: Set<String>?,
         strict: Boolean,
     ): List<FrameSearchHit> {
         val q = query.trim()
         if (q.isEmpty()) return emptyList()
+        if (scopePackages != null && scopePackages.isEmpty()) return emptyList()
         parseFrameIdQuery(q)?.let { frameId ->
             val row = dao.getFrameById(frameId) ?: return emptyList()
-            if (!scopePackage.isNullOrBlank() && row.packageName != scopePackage) {
+            if (scopePackages != null && row.packageName !in scopePackages) {
                 return emptyList()
             }
             return listOf(
@@ -811,10 +819,16 @@ class UsageRepository(private val context: Context) {
                 ),
             )
         }
-        val rows = if (scopePackage.isNullOrBlank()) {
-            dao.getAllFramesOrdered()
-        } else {
-            dao.getFramesForPackageAllTime(scopePackage)
+        val rows = when {
+            scopePackages == null -> dao.getAllFramesOrdered()
+            scopePackages.size == 1 -> dao.getFramesForPackageAllTime(scopePackages.first())
+            else -> {
+                val merged = ArrayList<com.liuji.xiaoqi.data.db.UiFrameEntity>()
+                for (chunk in scopePackages.toList().chunked(200)) {
+                    merged += dao.getFramesForPackages(chunk)
+                }
+                merged.sortedBy { it.capturedAt }
+            }
         }
         val hits = ArrayList<FrameSearchHit>()
         for (e in rows) {
@@ -827,7 +841,7 @@ class UsageRepository(private val context: Context) {
                 snippet = snippet,
             )
         }
-        return hits
+        return hits.sortedByDescending { it.capturedAt }
     }
 
     /** 支持 `123` / `#123` / `id:123`（忽略大小写与空白） */

@@ -175,7 +175,7 @@ class FrameRecorderService : Service() {
             val sparse = !snap.overlayOnly && FrameJson.isSparseText(snap.texts)
             if (needTextChange && lastTextHashByPkg[pkg] == hash) {
                 if (sparse) noteSparseFrame(dao, pkg) else if (!snap.overlayOnly) {
-                    sparseStreakByPkg[pkg] = 0
+                    clearSparse(pkg)
                 }
                 continue
             }
@@ -195,7 +195,7 @@ class FrameRecorderService : Service() {
             saved++
             lastPkg = pkg
 
-            if (sparse) noteSparseFrame(dao, pkg) else sparseStreakByPkg[pkg] = 0
+            if (sparse) noteSparseFrame(dao, pkg) else clearSparse(pkg)
         }
         if (saved > 0) {
             val modeHint = if (needTextChange) "文本变化" else interval.label
@@ -204,17 +204,32 @@ class FrameRecorderService : Service() {
     }
 
     private suspend fun noteSparseFrame(dao: com.liuji.xiaoqi.data.db.UsageDao, pkg: String) {
-        val next = (sparseStreakByPkg[pkg] ?: 0) + 1
-        sparseStreakByPkg[pkg] = next
-        if (next >= SPARSE_STREAK_TO_BLOCK) {
-            FrameBlacklistStore.add(
-                dao,
-                pkg,
-                resolveLabel(pkg),
-                FrameBlacklistStore.SOURCE_AUTO,
-            )
-            sparseStreakByPkg.remove(pkg)
+        if (
+            FrameBlacklistStore.isBlocked(pkg) ||
+            FrameBlacklistStore.isExempt(pkg) ||
+            FrameBlacklistStore.isPending(pkg)
+        ) {
+            clearSparse(pkg)
+            return
         }
+        val now = System.currentTimeMillis()
+        val since = sparseSinceByPkg[pkg] ?: 0L
+        val lastSeen = sparseLastSeenByPkg[pkg] ?: 0L
+        when (val step = SparseAutoPolicy.observe(since, lastSeen, now)) {
+            is SparseAutoPolicy.Step.Tracking -> {
+                sparseSinceByPkg[pkg] = step.since
+                sparseLastSeenByPkg[pkg] = now
+            }
+            SparseAutoPolicy.Step.Due -> {
+                clearSparse(pkg)
+                FrameBlacklistStore.propose(dao, pkg, resolveLabel(pkg))
+            }
+        }
+    }
+
+    private fun clearSparse(pkg: String) {
+        sparseSinceByPkg.remove(pkg)
+        sparseLastSeenByPkg.remove(pkg)
     }
 
     private fun resolveLabel(packageName: String): String {
@@ -263,7 +278,6 @@ class FrameRecorderService : Service() {
         const val ACTION_CAPTURE = "com.liuji.xiaoqi.frame.CAPTURE"
         private const val CHANNEL_ID = "frame_recorder"
         private const val NOTIFICATION_ID = 42
-        private const val SPARSE_STREAK_TO_BLOCK = 8
 
         @Volatile
         private var cachedIntervalMs: Long = 30_000L
@@ -272,7 +286,8 @@ class FrameRecorderService : Service() {
         private var eventDrivenMode: Boolean = false
 
         private val lastTextHashByPkg = ConcurrentHashMap<String, String>()
-        private val sparseStreakByPkg = ConcurrentHashMap<String, Int>()
+        private val sparseSinceByPkg = ConcurrentHashMap<String, Long>()
+        private val sparseLastSeenByPkg = ConcurrentHashMap<String, Long>()
 
         fun start(context: Context) {
             val intent = Intent(context, FrameRecorderService::class.java)
@@ -286,7 +301,8 @@ class FrameRecorderService : Service() {
         fun stop(context: Context) {
             FrameCaptureAccessibilityService.setEventDrivenEnabled(false)
             lastTextHashByPkg.clear()
-            sparseStreakByPkg.clear()
+            sparseSinceByPkg.clear()
+            sparseLastSeenByPkg.clear()
             context.startService(
                 Intent(context, FrameRecorderService::class.java).setAction(ACTION_STOP),
             )

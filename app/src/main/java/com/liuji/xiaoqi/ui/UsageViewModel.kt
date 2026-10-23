@@ -31,7 +31,11 @@ import com.liuji.xiaoqi.hindsight.db.HindsightDatabase
 import com.liuji.xiaoqi.ima.ImaSyncPrefs
 import com.liuji.xiaoqi.ima.ImaSyncRepository
 import com.liuji.xiaoqi.log.AppLog
+import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
+import java.time.temporal.TemporalAdjusters
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,6 +47,12 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+enum class FrameSearchScope {
+    CURRENT,
+    PICKED,
+    ALL,
+}
 
 enum class AppScreen {
     DASHBOARD,
@@ -135,6 +145,7 @@ data class UsageUiState(
     val accessibilityLegacyListed: Boolean = false,
     val frameCount: Long = 0,
     val frameBlacklist: List<FrameBlacklistItem> = emptyList(),
+    val frameBlacklistPending: List<FrameBlacklistItem> = emptyList(),
     val frameBlacklistPickerOpen: Boolean = false,
     val frameBlacklistSearch: String = "",
     val frameBlacklistCandidates: List<AppCategoryAssignment> = emptyList(),
@@ -155,7 +166,10 @@ data class UsageUiState(
     val frameIndex: Int = 0,
     val framesLoading: Boolean = false,
     val frameSearchQuery: String = "",
-    val frameSearchInCurrentApp: Boolean = true,
+    val frameSearchScope: FrameSearchScope = FrameSearchScope.CURRENT,
+    val frameSearchPackages: Set<String> = emptySet(),
+    val frameSearchCategories: List<CategoryWithApps> = emptyList(),
+    val frameSearchCategoriesLoading: Boolean = false,
     val frameSearchStrict: Boolean = false,
     val frameSearchHits: List<FrameSearchHit> = emptyList(),
     val frameSearchHitIndex: Int = 0,
@@ -907,31 +921,38 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun shiftOffset(delta: Int) {
-        val next = (_state.value.offset + delta).coerceAtMost(0)
+        applyOffset((_state.value.offset + delta).coerceAtMost(0))
+    }
+
+    fun jumpToCurrent() {
+        applyOffset(0)
+    }
+
+    /** 日跳到该日；周跳到该日所在周；月跳到该日所在月。不能晚于今天。 */
+    fun jumpToDate(date: LocalDate) {
+        val today = LocalDate.now()
+        if (date.isAfter(today)) return
+        val offset = when (_state.value.period) {
+            StatsPeriod.DAY -> ChronoUnit.DAYS.between(today, date).toInt()
+            StatsPeriod.WEEK -> {
+                val thisWeek = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                val target = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                ChronoUnit.WEEKS.between(thisWeek, target).toInt()
+            }
+            StatsPeriod.MONTH -> ChronoUnit.MONTHS.between(
+                today.withDayOfMonth(1),
+                date.withDayOfMonth(1),
+            ).toInt()
+        }
+        applyOffset(offset.coerceAtMost(0))
+    }
+
+    private fun applyOffset(next: Int) {
         if (next == _state.value.offset) return
         timelineLoadedOffset = null
         _state.update {
             it.copy(
                 offset = next,
-                selectedHour = null,
-                timeline = emptyList(),
-                timelineDrillStack = emptyList(),
-                timelineLoading = false,
-                dashboardFirstVisibleIndex = 0,
-                dashboardFirstVisibleOffset = 0,
-                hindsightListFirstVisibleIndex = 0,
-                hindsightListFirstVisibleOffset = 0,
-            )
-        }
-        reload()
-    }
-
-    fun jumpToCurrent() {
-        if (_state.value.offset == 0) return
-        timelineLoadedOffset = null
-        _state.update {
-            it.copy(
-                offset = 0,
                 selectedHour = null,
                 timeline = emptyList(),
                 timelineDrillStack = emptyList(),
@@ -1159,11 +1180,13 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                             FrameBlacklistStore.SOURCE_USER,
                         )
                     }
-                    FrameBlacklistStore.listActive(dao)
+                    FrameBlacklistStore.listActive(dao) to FrameBlacklistStore.listPending(dao)
                 }
-            }.onSuccess { items ->
+            }.onSuccess { (items, pending) ->
                 dismissFrameBlacklistPicker()
-                _state.update { it.copy(frameBlacklist = items) }
+                _state.update {
+                    it.copy(frameBlacklist = items, frameBlacklistPending = pending)
+                }
             }.onFailure { e ->
                 _state.update { it.copy(error = e.message ?: "加入黑名单失败") }
             }
@@ -1183,6 +1206,42 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 _state.update { it.copy(frameBlacklist = items) }
             }.onFailure { e ->
                 _state.update { it.copy(error = e.message ?: "移除黑名单失败") }
+            }
+        }
+    }
+
+    fun confirmFrameBlacklistPending(item: FrameBlacklistItem) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val dao = com.liuji.xiaoqi.data.db.UsageDatabase
+                        .getInstance(getApplication()).usageDao()
+                    FrameBlacklistStore.confirmPending(dao, item.packageName)
+                    FrameBlacklistStore.listActive(dao) to FrameBlacklistStore.listPending(dao)
+                }
+            }.onSuccess { (items, pending) ->
+                _state.update {
+                    it.copy(frameBlacklist = items, frameBlacklistPending = pending)
+                }
+            }.onFailure { e ->
+                _state.update { it.copy(error = e.message ?: "加入黑名单失败") }
+            }
+        }
+    }
+
+    fun dismissFrameBlacklistPending(item: FrameBlacklistItem) {
+        viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val dao = com.liuji.xiaoqi.data.db.UsageDatabase
+                        .getInstance(getApplication()).usageDao()
+                    FrameBlacklistStore.removeByUser(dao, item.packageName, item.label)
+                    FrameBlacklistStore.listPending(dao)
+                }
+            }.onSuccess { pending ->
+                _state.update { it.copy(frameBlacklistPending = pending) }
+            }.onFailure { e ->
+                _state.update { it.copy(error = e.message ?: "忽略候选失败") }
             }
         }
     }
@@ -1304,8 +1363,104 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(frameSearchQuery = query, frameSearchMessage = null) }
     }
 
-    fun setFrameSearchInCurrentApp(value: Boolean) {
-        _state.update { it.copy(frameSearchInCurrentApp = value) }
+    fun setFrameSearchScope(scope: FrameSearchScope) {
+        _state.update { it.copy(frameSearchScope = scope) }
+    }
+
+    fun setFrameSearchPackages(packages: Set<String>) {
+        _state.update {
+            it.copy(
+                frameSearchPackages = packages,
+                frameSearchScope = if (packages.isEmpty()) {
+                    FrameSearchScope.CURRENT
+                } else {
+                    FrameSearchScope.PICKED
+                },
+            )
+        }
+    }
+
+    fun loadFrameSearchCategories() {
+        if (_state.value.frameSearchCategories.isNotEmpty() ||
+            _state.value.frameSearchCategoriesLoading
+        ) {
+            return
+        }
+        viewModelScope.launch {
+            _state.update { it.copy(frameSearchCategoriesLoading = true) }
+            runCatching {
+                withContext(Dispatchers.IO) { repository.categories.listCategoriesWithApps() }
+            }.onSuccess { categories ->
+                _state.update {
+                    it.copy(
+                        frameSearchCategories = categories,
+                        frameSearchCategoriesLoading = false,
+                    )
+                }
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(
+                        frameSearchCategoriesLoading = false,
+                        frameSearchMessage = e.message ?: "加载应用分类失败",
+                    )
+                }
+            }
+        }
+    }
+
+    fun applyFrameDateFilter(epochDay: Long, startMinute: Int, endMinute: Int) {
+        val pkg = _state.value.frameAppPackage ?: return
+        val date = LocalDate.ofEpochDay(epochDay)
+        val zone = ZoneId.systemDefault()
+        val startMinuteClamped = startMinute.coerceIn(0, 23 * 60 + 59)
+        val endMinuteClamped = endMinute.coerceIn(startMinuteClamped, 23 * 60 + 59)
+        val startMillis = date.atTime(startMinuteClamped / 60, startMinuteClamped % 60)
+            .atZone(zone)
+            .toInstant()
+            .toEpochMilli()
+        val endMillis = date.atTime(endMinuteClamped / 60, endMinuteClamped % 60)
+            .plusMinutes(1)
+            .atZone(zone)
+            .toInstant()
+            .toEpochMilli()
+        viewModelScope.launch {
+            _state.update { it.copy(framesLoading = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.loadFramesForPackageBetween(pkg, startMillis, endMillis)
+                }
+            }.onSuccess { frames ->
+                _state.update {
+                    it.copy(frames = frames, frameIndex = 0, framesLoading = false)
+                }
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(framesLoading = false, error = e.message ?: "按日期加载画面失败")
+                }
+            }
+        }
+    }
+
+    fun clearFrameDateFilter() {
+        val pkg = _state.value.frameAppPackage ?: return
+        val period = _state.value.period
+        val offset = _state.value.offset
+        viewModelScope.launch {
+            _state.update { it.copy(framesLoading = true) }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.loadFramesForPackage(pkg, period, offset)
+                }
+            }.onSuccess { frames ->
+                _state.update {
+                    it.copy(frames = frames, frameIndex = 0, framesLoading = false)
+                }
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(framesLoading = false, error = e.message ?: "恢复画面失败")
+                }
+            }
+        }
     }
 
     fun setFrameSearchStrict(value: Boolean) {
@@ -1325,14 +1480,24 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
         if (_state.value.frameSearchLoading) return
-        val scopePkg = if (_state.value.frameSearchInCurrentApp) {
-            _state.value.frameAppPackage
-        } else {
-            null
-        }
-        if (_state.value.frameSearchInCurrentApp && scopePkg.isNullOrBlank()) {
-            _state.update { it.copy(frameSearchMessage = "当前无应用上下文") }
-            return
+        val scopePackages = when (_state.value.frameSearchScope) {
+            FrameSearchScope.CURRENT -> {
+                val pkg = _state.value.frameAppPackage
+                if (pkg.isNullOrBlank()) {
+                    _state.update { it.copy(frameSearchMessage = "当前无应用上下文") }
+                    return
+                }
+                setOf(pkg)
+            }
+            FrameSearchScope.ALL -> null
+            FrameSearchScope.PICKED -> {
+                val picked = _state.value.frameSearchPackages
+                if (picked.isEmpty()) {
+                    _state.update { it.copy(frameSearchMessage = "请先选择应用") }
+                    return
+                }
+                picked
+            }
         }
         val strict = _state.value.frameSearchStrict
         _state.update {
@@ -1341,7 +1506,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.searchFrames(query, scopePkg, strict)
+                    repository.searchFrames(query, scopePackages, strict)
                 }
             }.onSuccess { hits ->
                 _state.update {
@@ -1448,7 +1613,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             val blacklist = withContext(Dispatchers.IO) {
                 val dao = com.liuji.xiaoqi.data.db.UsageDatabase
                     .getInstance(getApplication()).usageDao()
-                FrameBlacklistStore.listActive(dao)
+                FrameBlacklistStore.listActive(dao) to FrameBlacklistStore.listPending(dao)
             }
             val privacyApps = withContext(Dispatchers.IO) { repository.listPrivacyApps() }
             val account = hindsightSync.account()
@@ -1464,7 +1629,8 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                     accessibilityEnabled = a11y,
                     accessibilityLegacyListed = legacy,
                     frameCount = count,
-                    frameBlacklist = blacklist,
+                    frameBlacklist = blacklist.first,
+                    frameBlacklistPending = blacklist.second,
                     privacyApps = privacyApps,
                     // 密码只存加密库，不回填到 UI state
                     webDavAccount = account.copy(password = ""),

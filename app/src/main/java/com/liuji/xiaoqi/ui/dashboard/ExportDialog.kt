@@ -1,21 +1,30 @@
 package com.liuji.xiaoqi.ui.dashboard
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material3.AlertDialogDefaults
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
@@ -26,9 +35,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.liuji.xiaoqi.data.StatsPeriod
 import com.liuji.xiaoqi.ui.theme.Accent
 import com.liuji.xiaoqi.ui.theme.TextMuted
@@ -57,20 +68,32 @@ fun ExportDialog(
     var pickingStart by remember { mutableStateOf(false) }
     var pickingEnd by remember { mutableStateOf(false) }
     var includeScreenTexts by remember { mutableStateOf(true) }
+    var fieldsExpanded by remember { mutableStateOf(false) }
     val dateFmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd") }
+    val maxHeight = (LocalConfiguration.current.screenHeightDp - 48).dp
 
-    AlertDialog(
-        onDismissRequest = { if (!exporting) onDismiss() },
-        shape = RoundedCornerShape(20.dp),
-        title = {
-            Text(
-                text = "导出使用数据",
-                fontWeight = FontWeight.SemiBold,
-                color = TextStrong,
-            )
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Dialog(onDismissRequest = { if (!exporting) onDismiss() }) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = maxHeight),
+            shape = RoundedCornerShape(20.dp),
+            color = AlertDialogDefaults.containerColor,
+        ) {
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 24.dp, bottom = 8.dp)) {
+                Text(
+                    text = "导出使用数据",
+                    fontWeight = FontWeight.SemiBold,
+                    color = TextStrong,
+                    fontSize = 22.sp,
+                )
+                Column(
+                    modifier = Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState())
+                        .padding(top = 16.dp, bottom = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                 Text(
                     text = "导出 Markdown（时长、时间戳、画面文本），便于 AI 阅读。隐私应用的帧文本不会写入。",
                     color = TextMuted,
@@ -78,29 +101,48 @@ fun ExportDialog(
                     lineHeight = 20.sp,
                 )
                 Spacer(Modifier.height(4.dp))
-                Text(
-                    "导出字段设置",
-                    color = TextStrong,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                )
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !exporting) { fieldsExpanded = !fieldsExpanded },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Checkbox(
-                        checked = includeScreenTexts,
-                        onCheckedChange = { includeScreenTexts = it },
-                        enabled = !exporting,
+                    Text(
+                        "导出字段设置",
+                        color = TextStrong,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.weight(1f),
                     )
-                    Column(Modifier.weight(1f)) {
-                        Text("屏幕文字记录数据", color = TextStrong, fontSize = 14.sp)
-                        Text(
-                            "帧视图里的画面文案。取消后不读取、不写入这部分数据。",
-                            color = TextMuted,
-                            fontSize = 12.sp,
-                            lineHeight = 16.sp,
+                    Icon(
+                        imageVector = if (fieldsExpanded) {
+                            Icons.Outlined.ExpandLess
+                        } else {
+                            Icons.Outlined.ExpandMore
+                        },
+                        contentDescription = if (fieldsExpanded) "收起" else "展开",
+                        tint = TextMuted,
+                    )
+                }
+                if (fieldsExpanded) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = includeScreenTexts,
+                            onCheckedChange = { includeScreenTexts = it },
+                            enabled = !exporting,
                         )
+                        Column(Modifier.weight(1f)) {
+                            Text("屏幕文字记录数据", color = TextStrong, fontSize = 14.sp)
+                            Text(
+                                "帧视图里的画面文案。取消后不读取、不写入这部分数据。",
+                                color = TextMuted,
+                                fontSize = 12.sp,
+                                lineHeight = 16.sp,
+                            )
+                        }
                     }
                 }
                 ExportOptionButton(
@@ -183,15 +225,18 @@ fun ExportDialog(
                         fontSize = 11.sp,
                     )
                 }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                ) {
+                    TextButton(onClick = onDismiss, enabled = !exporting) {
+                        Text("取消")
+                    }
+                }
             }
-        },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !exporting) {
-                Text("取消")
-            }
-        },
-    )
+        }
+    }
 
     if (pickingStart) {
         ExportDatePickerDialog(

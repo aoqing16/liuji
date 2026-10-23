@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -88,6 +87,7 @@ fun SettingsScreen(
     onSyncCloud: () -> Unit,
     onOpenRuntimeLog: () -> Unit = {},
     frameBlacklist: List<FrameBlacklistItem> = emptyList(),
+    frameBlacklistPending: List<FrameBlacklistItem> = emptyList(),
     frameBlacklistCandidates: List<AppCategoryAssignment> = emptyList(),
     frameBlacklistSearch: String = "",
     frameBlacklistPickerOpen: Boolean = false,
@@ -96,6 +96,8 @@ fun SettingsScreen(
     onBlacklistSearchChange: (String) -> Unit = {},
     onAddBlacklist: (List<AppCategoryAssignment>) -> Unit = {},
     onRemoveBlacklist: (FrameBlacklistItem) -> Unit = {},
+    onConfirmBlacklistPending: (FrameBlacklistItem) -> Unit = {},
+    onDismissBlacklistPending: (FrameBlacklistItem) -> Unit = {},
     privacyApps: List<PrivacyAppEntity> = emptyList(),
     privacyAppCandidates: List<AppCategoryAssignment> = emptyList(),
     privacyAppSearch: String = "",
@@ -121,9 +123,19 @@ fun SettingsScreen(
             .verticalScroll(rememberScrollState())
             .padding(Space.lg),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.size(40.dp),
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = "返回",
+                    tint = TextStrong,
+                )
             }
             Text(
                 text = "设置",
@@ -132,7 +144,7 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
             )
         }
-        Spacer(Modifier.height(Space.lg))
+        Spacer(Modifier.height(Space.md))
 
         SettingsCard(title = "电脑看板 · 云盘只读") {
             Text(
@@ -240,7 +252,7 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Space.md))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -272,7 +284,7 @@ fun SettingsScreen(
                 )
             }
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Space.md))
             Text("记录频率", color = TextStrong, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Spacer(Modifier.height(Space.sm))
             FlowRow(
@@ -306,19 +318,41 @@ fun SettingsScreen(
                 modifier = Modifier.padding(top = Space.sm),
             )
 
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Space.md))
             Text("黑名单", color = TextStrong, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Text(
-                "名单内应用不会记录画面。可手动增删；文本极少或匹配游戏引擎特征时会自动加入。移除后不再自动加回。",
+                "名单内应用不会记录画面。持续几乎无文本约 2 分钟会进入待确认，确认后才不记录。特征匹配仍会直接加入。可手动增删。移除后不再自动加回。",
                 color = TextMuted,
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
                 modifier = Modifier.padding(top = Space.xs, bottom = Space.sm),
             )
+            if (frameBlacklistPending.isNotEmpty()) {
+                Text(
+                    "待确认",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(bottom = Space.xs),
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    verticalArrangement = Arrangement.spacedBy(Space.sm),
+                ) {
+                    frameBlacklistPending.forEach { item ->
+                        PendingBlacklistChip(
+                            item = item,
+                            iconLoader = iconLoader,
+                            onConfirm = { onConfirmBlacklistPending(item) },
+                            onDismiss = { onDismissBlacklistPending(item) },
+                        )
+                    }
+                }
+                Spacer(Modifier.height(Space.sm))
+            }
             if (frameBlacklist.isNotEmpty()) {
                 FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    verticalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     frameBlacklist.forEach { item ->
                         BlacklistAppChip(
@@ -328,7 +362,7 @@ fun SettingsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(Space.sm))
             }
             AddBlacklistChip(onClick = onOpenBlacklistPicker)
         }
@@ -345,8 +379,8 @@ fun SettingsScreen(
             )
             if (privacyApps.isNotEmpty()) {
                 FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                    verticalArrangement = Arrangement.spacedBy(Space.sm),
                 ) {
                     privacyApps.forEach { item ->
                         PrivacyAppChip(
@@ -356,7 +390,7 @@ fun SettingsScreen(
                         )
                     }
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(Space.sm))
             }
             AddBlacklistChip(onClick = onOpenPrivacyAppPicker)
         }
@@ -370,7 +404,7 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(Space.sm))
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -396,7 +430,7 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 lineHeight = 18.sp,
             )
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(Space.sm))
             Button(
                 onClick = onRebuildUsage,
                 enabled = !usageRebuilding,
@@ -445,9 +479,9 @@ private fun BlacklistAppChip(
     }
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(ShapeChip)
             .background(SurfaceChip)
-            .padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = Space.sm, end = Space.xs, top = Space.xs, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AppIconImage(
@@ -456,19 +490,70 @@ private fun BlacklistAppChip(
             tint = Accent,
             size = 18.dp,
         )
-        Spacer(Modifier.width(6.dp))
-        Column {
+        Spacer(Modifier.width(Space.xs))
+        Column(modifier = Modifier.padding(end = Space.xs)) {
             Text(item.label, color = TextStrong, fontSize = 12.sp, maxLines = 1)
             Text(sourceHint, color = TextMuted, fontSize = 10.sp)
         }
-        IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "移除",
-                tint = TextMuted,
-                modifier = Modifier.size(14.dp),
-            )
-        }
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "移除",
+            tint = TextMuted,
+            modifier = Modifier
+                .size(20.dp)
+                .clip(ShapeChip)
+                .clickable(onClick = onRemove)
+                .padding(Space.xxs),
+        )
+    }
+}
+
+@Composable
+private fun PendingBlacklistChip(
+    item: FrameBlacklistItem,
+    iconLoader: (String) -> Drawable?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .clip(ShapeChip)
+            .background(SurfaceChip)
+            .padding(start = Space.sm, end = Space.xs, top = Space.xs, bottom = Space.xs),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        AppIconImage(
+            packageName = item.packageName,
+            drawable = iconLoader(item.packageName),
+            tint = Accent,
+            size = 18.dp,
+        )
+        Spacer(Modifier.width(Space.xs))
+        Text(
+            item.label,
+            color = TextStrong,
+            fontSize = 12.sp,
+            maxLines = 1,
+            modifier = Modifier.padding(end = Space.xs),
+        )
+        Text(
+            "加入",
+            color = Accent,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .clip(ShapeChip)
+                .clickable(onClick = onConfirm)
+                .padding(horizontal = Space.xs, vertical = Space.xxs),
+        )
+        Text(
+            "忽略",
+            color = TextMuted,
+            fontSize = 12.sp,
+            modifier = Modifier
+                .clip(ShapeChip)
+                .clickable(onClick = onDismiss)
+                .padding(horizontal = Space.xs, vertical = Space.xxs),
+        )
     }
 }
 
@@ -480,9 +565,9 @@ private fun PrivacyAppChip(
 ) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(ShapeChip)
             .background(SurfaceChip)
-            .padding(start = 6.dp, end = 4.dp, top = 4.dp, bottom = 4.dp),
+            .padding(start = Space.sm, end = Space.xs, top = Space.xs, bottom = Space.xs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         AppIconImage(
@@ -491,16 +576,24 @@ private fun PrivacyAppChip(
             tint = Accent,
             size = 18.dp,
         )
-        Spacer(Modifier.width(6.dp))
-        Text(item.label, color = TextStrong, fontSize = 12.sp, maxLines = 1)
-        IconButton(onClick = onRemove, modifier = Modifier.size(24.dp)) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "移除",
-                tint = TextMuted,
-                modifier = Modifier.size(14.dp),
-            )
-        }
+        Spacer(Modifier.width(Space.xs))
+        Text(
+            item.label,
+            color = TextStrong,
+            fontSize = 12.sp,
+            maxLines = 1,
+            modifier = Modifier.padding(end = Space.xs),
+        )
+        Icon(
+            Icons.Filled.Close,
+            contentDescription = "移除",
+            tint = TextMuted,
+            modifier = Modifier
+                .size(20.dp)
+                .clip(ShapeChip)
+                .clickable(onClick = onRemove)
+                .padding(Space.xxs),
+        )
     }
 }
 
@@ -508,15 +601,22 @@ private fun PrivacyAppChip(
 private fun AddBlacklistChip(onClick: () -> Unit) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .border(1.dp, Accent.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
+            .fillMaxWidth()
+            .clip(ShapeChip)
+            .border(Stroke.hairline, Accent.copy(alpha = 0.45f), ShapeChip)
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = Space.md, vertical = Space.md),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.Center,
     ) {
-        Icon(Icons.Outlined.Add, contentDescription = null, tint = Accent, modifier = Modifier.size(16.dp))
-        Spacer(Modifier.width(4.dp))
-        Text("+ 添加应用", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+        Icon(
+            Icons.Outlined.Add,
+            contentDescription = null,
+            tint = Accent,
+            modifier = Modifier.size(16.dp),
+        )
+        Spacer(Modifier.width(Space.xs))
+        Text("添加应用", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.Medium)
     }
 }
 
@@ -534,7 +634,7 @@ private fun SettingsCard(
             .padding(Space.lg),
     ) {
         Text(title, color = TextStrong, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(Space.sm))
         content()
     }
 }

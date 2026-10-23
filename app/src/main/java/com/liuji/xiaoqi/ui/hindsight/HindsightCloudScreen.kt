@@ -47,6 +47,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -64,7 +66,9 @@ import com.liuji.xiaoqi.ui.components.CategoryLegend
 import com.liuji.xiaoqi.ui.components.CategoryRankedList
 import com.liuji.xiaoqi.ui.components.HourlyChart
 import com.liuji.xiaoqi.ui.components.PeriodBarChart
+import com.liuji.xiaoqi.ui.dashboard.PeriodDatePickerDialog
 import com.liuji.xiaoqi.ui.dashboard.filterAppsByQuery
+import com.liuji.xiaoqi.ui.dashboard.periodAnchorDate
 import com.liuji.xiaoqi.ui.theme.Accent
 import com.liuji.xiaoqi.ui.theme.AccentSoft
 import com.liuji.xiaoqi.ui.theme.BorderDefault
@@ -77,6 +81,7 @@ import com.liuji.xiaoqi.ui.util.formatFullDate
 import com.liuji.xiaoqi.ui.util.formatMonthDay
 import com.liuji.xiaoqi.ui.util.formatWeekday
 import com.liuji.xiaoqi.ui.util.periodPillLabel
+import java.time.LocalDate
 
 /**
  * 电脑 Hindsight 同版看板（与手机本机看板分离）。
@@ -91,6 +96,7 @@ fun HindsightCloudScreen(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onJumpCurrent: () -> Unit,
+    onJumpToDate: (LocalDate) -> Unit,
     onSelectHour: (Int?) -> Unit,
     onRefresh: () -> Unit,
     onOpenSettings: () -> Unit,
@@ -102,6 +108,7 @@ fun HindsightCloudScreen(
     iconLoader: (String) -> Drawable?,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    var pickingPeriod by remember { mutableStateOf(false) }
     val listState = remember {
         LazyListState(
             firstVisibleItemIndex = state.hindsightListFirstVisibleIndex,
@@ -118,6 +125,22 @@ fun HindsightCloudScreen(
         onDispose {
             onScroll(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
         }
+    }
+
+    if (pickingPeriod) {
+        PeriodDatePickerDialog(
+            period = state.period,
+            initial = periodAnchorDate(state.period, state.offset),
+            onDismiss = { pickingPeriod = false },
+            onToday = {
+                onJumpCurrent()
+                pickingPeriod = false
+            },
+            onConfirm = { date ->
+                onJumpToDate(date)
+                pickingPeriod = false
+            },
+        )
     }
 
     LaunchedEffect(state.message) {
@@ -137,6 +160,12 @@ fun HindsightCloudScreen(
                 .fillMaxSize()
                 .padding(padding),
         ) {
+            LaunchedEffect(state.dashboardAppQuery, state.summary != null) {
+                val query = state.dashboardAppQuery.trim()
+                if (query.isEmpty() || state.summary == null) return@LaunchedEffect
+                snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > 3 }
+                listState.animateScrollToItem(3)
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize(),
@@ -167,7 +196,7 @@ fun HindsightCloudScreen(
                         summary = state.summary,
                         onPrev = onPrev,
                         onNext = onNext,
-                        onJumpCurrent = onJumpCurrent,
+                        onOpenCalendar = { pickingPeriod = true },
                         onSelectHour = onSelectHour,
                     )
                 }
@@ -417,7 +446,7 @@ private fun HindsightPeriodCard(
     summary: PeriodSummary?,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onJumpCurrent: () -> Unit,
+    onOpenCalendar: () -> Unit,
     onSelectHour: (Int?) -> Unit,
 ) {
     Column(
@@ -447,7 +476,7 @@ private fun HindsightPeriodCard(
             IconButton(onClick = onPrev, modifier = Modifier.size(28.dp)) {
                 Icon(Icons.Outlined.ChevronLeft, contentDescription = null, tint = TextMuted)
             }
-            TextButton(onClick = onJumpCurrent) {
+            TextButton(onClick = onOpenCalendar) {
                 Text(
                     periodPillLabel(state.period, state.offset),
                     color = TextStrong,

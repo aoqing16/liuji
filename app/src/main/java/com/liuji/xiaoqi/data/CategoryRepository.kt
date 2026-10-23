@@ -16,17 +16,29 @@ class CategoryRepository(context: Context) {
 
     suspend fun ensureSeeded() {
         val existing = dao.getAllCategories()
-        if (existing.isNotEmpty()) return
-        val seeded = Categories.all.mapIndexed { index, cat ->
-            UserCategoryEntity(
-                id = cat.id,
-                name = cat.name,
-                color = CategoryColors.toHex(cat.color),
-                builtin = true,
-                sortOrder = index,
-            )
+        if (existing.isEmpty()) {
+            val seeded = Categories.all.mapIndexed { index, cat ->
+                UserCategoryEntity(
+                    id = cat.id,
+                    name = cat.name,
+                    color = CategoryColors.toHex(cat.color),
+                    builtin = true,
+                    sortOrder = index,
+                )
+            }
+            dao.upsertCategories(seeded)
+            return
         }
-        dao.upsertCategories(seeded)
+        val byId = existing.associateBy { it.id }
+        for (cat in Categories.all) {
+            val row = byId[cat.id] ?: continue
+            if (!row.builtin) continue
+            val hex = CategoryColors.toHex(cat.color)
+            if (row.color != hex) {
+                dao.updateBuiltinCategoryColor(cat.id, hex)
+            }
+        }
+        CategoryRegistry.updateFromDb(dao.getAllCategories())
     }
 
     suspend fun listCategoriesWithCounts(): List<UserCategoryWithCount> {

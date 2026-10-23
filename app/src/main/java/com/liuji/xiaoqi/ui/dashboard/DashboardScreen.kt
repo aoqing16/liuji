@@ -53,6 +53,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -119,6 +121,7 @@ fun DashboardScreen(
     onPrev: () -> Unit,
     onNext: () -> Unit,
     onJumpCurrent: () -> Unit,
+    onJumpToDate: (LocalDate) -> Unit,
     onSelectHour: (Int?) -> Unit,
     onOpenExport: () -> Unit,
     onDismissExport: () -> Unit,
@@ -139,6 +142,7 @@ fun DashboardScreen(
     iconLoader: (String) -> Drawable?,
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
+    var pickingPeriod by remember { mutableStateOf(false) }
     val listState = remember {
         LazyListState(
             firstVisibleItemIndex = state.dashboardFirstVisibleIndex,
@@ -171,6 +175,22 @@ fun DashboardScreen(
         val msg = state.message ?: return@LaunchedEffect
         snackbarHostState.showSnackbar(msg)
         onMessageShown()
+    }
+
+    if (pickingPeriod) {
+        PeriodDatePickerDialog(
+            period = state.period,
+            initial = periodAnchorDate(state.period, state.offset),
+            onDismiss = { pickingPeriod = false },
+            onToday = {
+                onJumpCurrent()
+                pickingPeriod = false
+            },
+            onConfirm = { date ->
+                onJumpToDate(date)
+                pickingPeriod = false
+            },
+        )
     }
 
     if (state.showExportDialog) {
@@ -216,6 +236,19 @@ fun DashboardScreen(
             onRefresh = onRefresh,
             modifier = Modifier.fillMaxSize(),
         ) {
+        LaunchedEffect(state.dashboardAppQuery, state.period, showTimeline, summary != null) {
+            val query = state.dashboardAppQuery.trim()
+            if (query.isEmpty() || summary == null) return@LaunchedEffect
+            val index = if (showTimeline) {
+                3
+            } else if (state.period == StatsPeriod.DAY) {
+                4
+            } else {
+                3
+            }
+            snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index }
+            listState.animateScrollToItem(index)
+        }
         LazyColumn(
             state = listState,
             flingBehavior = if (showTimeline) flingBehavior else ScrollableDefaults.flingBehavior(),
@@ -258,6 +291,24 @@ fun DashboardScreen(
             }
 
             if (showTimeline) {
+                val appQuery = state.dashboardAppQuery.trim()
+                if (appQuery.isNotEmpty()) {
+                    summary?.let { data ->
+                        val filteredApps = filterAppsByQuery(data.apps, appQuery)
+                        item(key = "apps-search") {
+                            DashboardCard(title = "搜索结果") {
+                                AppRankedList(
+                                    apps = filteredApps,
+                                    totalMillis = data.totalMillis,
+                                    iconLoader = cachedIconLoader,
+                                    defaultLimit = Int.MAX_VALUE,
+                                    onAppClick = onAppClick,
+                                    emptyText = "未找到匹配「$appQuery」的应用",
+                                )
+                            }
+                        }
+                    }
+                }
                 item(key = "timeline-card-head") {
                     DashboardCard(
                         title = "时间戳视图 · 前台记录",
@@ -267,7 +318,7 @@ fun DashboardScreen(
                                 canGoForward = state.offset < 0,
                                 onPrev = onPrev,
                                 onNext = onNext,
-                                onJumpCurrent = onJumpCurrent,
+                                onOpenCalendar = { pickingPeriod = true },
                             )
                         },
                     ) {
@@ -322,7 +373,7 @@ fun DashboardScreen(
                         summary = summary,
                         onPrev = onPrev,
                         onNext = onNext,
-                        onJumpCurrent = onJumpCurrent,
+                        onOpenCalendar = { pickingPeriod = true },
                         onSelectHour = onSelectHour,
                     )
                 }
@@ -787,7 +838,7 @@ private fun ChartCard(
     summary: PeriodSummary?,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onJumpCurrent: () -> Unit,
+    onOpenCalendar: () -> Unit,
     onSelectHour: (Int?) -> Unit,
 ) {
     DashboardCard(
@@ -802,7 +853,7 @@ private fun ChartCard(
                 canGoForward = state.offset < 0,
                 onPrev = onPrev,
                 onNext = onNext,
-                onJumpCurrent = onJumpCurrent,
+                onOpenCalendar = onOpenCalendar,
             )
         },
     ) {
@@ -856,13 +907,13 @@ private fun PeriodNav(
     canGoForward: Boolean,
     onPrev: () -> Unit,
     onNext: () -> Unit,
-    onJumpCurrent: () -> Unit,
+    onOpenCalendar: () -> Unit,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onPrev, modifier = Modifier.size(28.dp)) {
             Icon(Icons.Outlined.ChevronLeft, contentDescription = "上一期", tint = TextMuted)
         }
-        TextButton(onClick = onJumpCurrent) {
+        TextButton(onClick = onOpenCalendar) {
             Text(label, color = TextStrong, fontSize = 12.sp)
         }
         IconButton(
