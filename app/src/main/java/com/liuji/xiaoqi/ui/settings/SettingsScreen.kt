@@ -26,6 +26,7 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material3.Button
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -64,10 +65,13 @@ import com.liuji.xiaoqi.ui.theme.Space
 import com.liuji.xiaoqi.ui.theme.Stroke
 import com.liuji.xiaoqi.ui.theme.TextMuted
 import com.liuji.xiaoqi.ui.theme.TextStrong
+import com.liuji.xiaoqi.ui.theme.ThemeMode
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
+    themeMode: ThemeMode = ThemeMode.SYSTEM,
+    onThemeModeChange: (ThemeMode) -> Unit = {},
     frameEnabled: Boolean,
     frameInterval: FrameInterval,
     accessibilityEnabled: Boolean,
@@ -81,8 +85,6 @@ fun SettingsScreen(
     onToggleFrame: (Boolean) -> Unit,
     onIntervalChange: (FrameInterval) -> Unit,
     onOpenAccessibility: () -> Unit,
-    onRebuildUsage: () -> Unit,
-    usageRebuilding: Boolean = false,
     onSaveWebDav: (url: String, user: String, password: String, root: String) -> Unit,
     onSyncCloud: () -> Unit,
     onOpenRuntimeLog: () -> Unit = {},
@@ -144,6 +146,38 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold,
             )
         }
+        Spacer(Modifier.height(Space.md))
+
+        SettingsCard(title = "外观") {
+            Text(
+                "暗光环境下可用深色界面。跟随系统时与手机显示设置一致。",
+                color = TextMuted,
+                fontSize = 12.sp,
+                lineHeight = 18.sp,
+            )
+            Spacer(Modifier.height(Space.md))
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(Space.sm),
+                verticalArrangement = Arrangement.spacedBy(Space.sm),
+            ) {
+                FilterChip(
+                    selected = themeMode == ThemeMode.SYSTEM,
+                    onClick = { onThemeModeChange(ThemeMode.SYSTEM) },
+                    label = { Text("跟随系统") },
+                )
+                FilterChip(
+                    selected = themeMode == ThemeMode.LIGHT,
+                    onClick = { onThemeModeChange(ThemeMode.LIGHT) },
+                    label = { Text("浅色") },
+                )
+                FilterChip(
+                    selected = themeMode == ThemeMode.DARK,
+                    onClick = { onThemeModeChange(ThemeMode.DARK) },
+                    label = { Text("深色") },
+                )
+            }
+        }
+
         Spacer(Modifier.height(Space.md))
 
         SettingsCard(title = "电脑看板 · 云盘只读") {
@@ -418,25 +452,6 @@ fun SettingsScreen(
             ) {
                 Text("查看运行日志", color = TextStrong, fontSize = 14.sp)
                 Text("›", color = TextMuted, fontSize = 18.sp)
-            }
-        }
-
-        Spacer(Modifier.height(Space.md))
-
-        SettingsCard(title = "用量数据修复") {
-            Text(
-                "清空本地使用记录，并重新从系统读取各应用使用时长。可用于修复跨午夜（0 点）缺失等问题。",
-                color = TextMuted,
-                fontSize = 12.sp,
-                lineHeight = 18.sp,
-            )
-            Spacer(Modifier.height(Space.sm))
-            Button(
-                onClick = onRebuildUsage,
-                enabled = !usageRebuilding,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(if (usageRebuilding) "正在重建…" else "清空并重建用量")
             }
         }
     }

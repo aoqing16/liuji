@@ -12,6 +12,9 @@ import android.os.Build
 import android.os.Process
 import android.provider.Settings
 import androidx.core.content.getSystemService
+import com.liuji.xiaoqi.log.AppLog
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.yield
 import com.liuji.xiaoqi.data.db.AppMetaEntity
 import com.liuji.xiaoqi.data.db.AppSettingsEntity
@@ -126,13 +129,24 @@ class UsageRepository(private val context: Context) {
      * - 之后：从上次水位前 [SYNC_OVERLAP_MILLIS] 开始，覆盖重写该区间，保证幂等
      * - 采集窗口额外前移 [COLLECT_LOOKBACK_MILLIS]（至少 1 天），避免跨午夜会话
      *   的 RESUMED 落在窗外导致孤儿 PAUSE 被丢弃（对齐 ScreenTime Glance）
+     * - 重写下界取系统实际返回的最早事件（相对 syncStart，不含 lookback 日）：
+     *   UsageEvents 只保留近若干天，不可用更长的 collectStart 清空本地更早历史
+     * - 无事件 / 采集失败：不删本地、不推进水位
      */
     suspend fun syncFromSystem(
         ensureRangeStart: Long? = null,
         untilMillis: Long = System.currentTimeMillis(),
     ) {
         if (!hasUsageAccess()) return
+        syncMutex.withLock {
+            syncFromSystemLocked(ensureRangeStart, untilMillis)
+        }
+    }
 
+    private suspend fun syncFromSystemLocked(
+        ensureRangeStart: Long?,
+        untilMillis: Long,
+    ) {
         categoryRepository.ensureSeeded()
         categoryResolver.refresh()
         val existingMeta = dao.getAllAppMeta().associateBy { it.packageName }
@@ -153,19 +167,29 @@ class UsageRepository(private val context: Context) {
         // 多查至少一天，才能配对「昨日 RESUMED → 今日 PAUSE」
         val collectStart = (syncStart - COLLECT_LOOKBACK_MILLIS).coerceAtLeast(0L)
         val collected = collectSessions(collectStart, untilMillis)
-        val entities = collected.map { session ->
+        val earliest = collected.earliestEventMillis
+        if (earliest == null) {
+            AppLog.w(TAG, "no usage events; skip rewrite and watermark")
+            return
+        }
+        val rewriteStart = max(syncStart, earliest)
+        if (untilMillis <= rewriteStart) return
+
+        val entities = collected.sessions.mapNotNull { session ->
+            val start = max(session.startMillis, rewriteStart)
+            val end = min(session.endMillis, untilMillis)
+            if (end <= start) return@mapNotNull null
             UsageSessionEntity(
                 packageName = session.packageName,
-                startMillis = session.startMillis,
-                endMillis = session.endMillis,
+                startMillis = start,
+                endMillis = end,
                 categoryId = categoryResolver.resolve(session.packageName),
             )
         }
-        // 按 start 落在采集窗内删除并重写，与 collectStart 对齐
-        dao.replaceSessionsInRange(collectStart, untilMillis, entities)
+        dao.replaceSessionsInRange(rewriteStart, untilMillis, entities)
 
         val now = System.currentTimeMillis()
-        val metas = collected
+        val metas = collected.sessions
             .map { it.packageName }
             .distinct()
             .map { pkg ->
@@ -195,14 +219,6 @@ class UsageRepository(private val context: Context) {
         categoryResolver.refresh()
 
         dao.upsertSyncState(SyncStateEntity(lastSyncedMillis = untilMillis))
-    }
-
-    /**
-     * 修复损坏的跨夜用量：清空本地会话与同步水位，下次 [syncFromSystem] 将全量回溯重采。
-     */
-    suspend fun clearLocalUsageForResync() {
-        dao.deleteAllSessions()
-        dao.clearSyncState()
     }
 
     private fun buildSummary(
@@ -382,24 +398,41 @@ class UsageRepository(private val context: Context) {
         val startMillis: Long,
     )
 
+    private data class CollectedSessions(
+        val sessions: List<Session>,
+        /** 系统返回的最早一条事件时间；null 表示窗内没有任何事件 */
+        val earliestEventMillis: Long?,
+    )
+
     /**
      * 从 UsageEvents 构建前台会话。
      * open 表按 className（缺省 package）配对，对齐 ScreenTime；区间归到 packageName。
      */
-    private fun collectSessions(startMillis: Long, endMillis: Long): List<Session> {
-        val manager = usageStatsManager ?: return emptyList()
-        if (endMillis <= startMillis) return emptyList()
+    private fun collectSessions(startMillis: Long, endMillis: Long): CollectedSessions {
+        val manager = usageStatsManager
+            ?: return CollectedSessions(emptyList(), earliestEventMillis = null)
+        if (endMillis <= startMillis) {
+            return CollectedSessions(emptyList(), earliestEventMillis = null)
+        }
 
-        val events = manager.queryEvents(startMillis, endMillis)
+        val events = try {
+            manager.queryEvents(startMillis, endMillis)
+        } catch (e: Exception) {
+            AppLog.w(TAG, "queryEvents failed", e)
+            return CollectedSessions(emptyList(), earliestEventMillis = null)
+        }
         val event = UsageEvents.Event()
         // key = className ?: packageName
         val openAt = HashMap<String, OpenActivity>()
         val sessions = ArrayList<Session>()
+        var earliestEventMillis: Long? = null
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
             val pkg = event.packageName ?: continue
             if (shouldIgnore(pkg)) continue
+            val ts = event.timeStamp
+            earliestEventMillis = earliestEventMillis?.let { min(it, ts) } ?: ts
             val classKey = event.className?.takeIf { it.isNotBlank() } ?: pkg
 
             when (event.eventType) {
@@ -409,34 +442,41 @@ class UsageRepository(private val context: Context) {
                     // 同组件再次 RESUMED：覆盖为最新起点（与 ScreenTime 一致）
                     openAt[classKey] = OpenActivity(
                         packageName = pkg,
-                        startMillis = event.timeStamp,
+                        startMillis = ts,
                     )
                 }
 
                 UsageEvents.Event.ACTIVITY_PAUSED,
                 UsageEvents.Event.MOVE_TO_BACKGROUND,
                 -> {
-                    closeSession(openAt, sessions, classKey, event.timeStamp, endMillis)
+                    closeSession(openAt, sessions, classKey, ts, endMillis)
                 }
 
                 else -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
                         event.eventType == UsageEvents.Event.ACTIVITY_STOPPED
                     ) {
-                        closeSession(openAt, sessions, classKey, event.timeStamp, endMillis)
+                        closeSession(openAt, sessions, classKey, ts, endMillis)
                     }
                 }
             }
         }
 
-        // 窗尾仍前台：全部 seal 到 endMillis（比只封最晚一个更不易漏）
+        // 窗尾仍前台：每包只 seal 起点最晚的一条，避免多 activity 叠段
         val closeAt = endMillis
+        val latestByPackage = LinkedHashMap<String, OpenActivity>()
         for ((_, open) in openAt) {
+            val prev = latestByPackage[open.packageName]
+            if (prev == null || open.startMillis >= prev.startMillis) {
+                latestByPackage[open.packageName] = open
+            }
+        }
+        for (open in latestByPackage.values) {
             if (closeAt > open.startMillis) {
                 sessions += Session(open.packageName, open.startMillis, closeAt)
             }
         }
-        return sessions
+        return CollectedSessions(sessions, earliestEventMillis)
     }
 
     private fun closeSession(
@@ -578,10 +618,18 @@ class UsageRepository(private val context: Context) {
     }
 
     suspend fun updateFrameSettings(enabled: Boolean, interval: FrameInterval): AppSettingsEntity {
-        val next = AppSettingsEntity(
+        val current = getOrCreateSettings()
+        val next = current.copy(
             frameRecordingEnabled = enabled,
             frameIntervalMs = interval.millis,
         )
+        dao.upsertSettings(next)
+        return next
+    }
+
+    suspend fun updateThemeMode(themeMode: String): AppSettingsEntity {
+        val current = getOrCreateSettings()
+        val next = current.copy(themeMode = themeMode)
         dao.upsertSettings(next)
         return next
     }
@@ -795,16 +843,24 @@ class UsageRepository(private val context: Context) {
     /**
      * @param scopePackages null 为全局；非空则只搜这些包
      * @param strict true=区分大小写 contains；false=不区分大小写 contains
+     * @param terms 多条关键词；空则退回 [query]
+     * @param matchAll true=每个关键词都要出现在该帧；false=任一即可
+     * @param allowFrameId 仅单关键词模式解析记录编号
      */
     suspend fun searchFrames(
         query: String,
         scopePackages: Set<String>?,
         strict: Boolean,
+        terms: List<String> = emptyList(),
+        matchAll: Boolean = false,
+        allowFrameId: Boolean = true,
     ): List<FrameSearchHit> {
-        val q = query.trim()
-        if (q.isEmpty()) return emptyList()
+        val activeTerms = terms.map { it.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOfNotNull(query.trim().takeIf { it.isNotEmpty() }) }
+        if (activeTerms.isEmpty()) return emptyList()
         if (scopePackages != null && scopePackages.isEmpty()) return emptyList()
-        parseFrameIdQuery(q)?.let { frameId ->
+        if (allowFrameId && activeTerms.size == 1) {
+            parseFrameIdQuery(activeTerms.first())?.let { frameId ->
             val row = dao.getFrameById(frameId) ?: return emptyList()
             if (scopePackages != null && row.packageName !in scopePackages) {
                 return emptyList()
@@ -818,6 +874,7 @@ class UsageRepository(private val context: Context) {
                     snippet = "frame_id=$frameId",
                 ),
             )
+            }
         }
         val rows = when {
             scopePackages == null -> dao.getAllFramesOrdered()
@@ -832,7 +889,7 @@ class UsageRepository(private val context: Context) {
         }
         val hits = ArrayList<FrameSearchHit>()
         for (e in rows) {
-            val snippet = firstMatchSnippet(e.textsJson, q, strict) ?: continue
+            val snippet = matchSnippet(e.textsJson, activeTerms, strict, matchAll) ?: continue
             hits += FrameSearchHit(
                 frameId = e.id,
                 packageName = e.packageName,
@@ -867,13 +924,28 @@ class UsageRepository(private val context: Context) {
         texts = FrameJson.textsFromJson(textsJson),
     )
 
-    private fun firstMatchSnippet(textsJson: String, query: String, strict: Boolean): String? {
+    private fun matchSnippet(
+        textsJson: String,
+        terms: List<String>,
+        strict: Boolean,
+        matchAll: Boolean,
+    ): String? {
         val nodes = FrameJson.textsFromJson(textsJson)
+        val snippets = arrayOfNulls<String>(terms.size)
+        var found = 0
         for (n in nodes) {
-            matchField(n.text, query, strict)?.let { return it }
-            matchField(n.desc, query, strict)?.let { return it }
+            for (i in terms.indices) {
+                if (snippets[i] != null) continue
+                val hit = matchField(n.text, terms[i], strict) ?: matchField(n.desc, terms[i], strict)
+                if (hit != null) {
+                    snippets[i] = hit
+                    found++
+                }
+            }
+            if (found == terms.size) break
         }
-        return null
+        if (found == 0 || (matchAll && found < terms.size)) return null
+        return snippets.filterNotNull().distinct().joinToString(" · ").take(160)
     }
 
     private fun matchField(field: String, query: String, strict: Boolean): String? {
@@ -891,6 +963,8 @@ class UsageRepository(private val context: Context) {
         Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
 
     companion object {
+        private const val TAG = "UsageSync"
+        private val syncMutex = Mutex()
         private const val MAX_ICON_CACHE = 128
         private const val DAY_MILLIS = 24L * 60 * 60 * 1000
         private const val INITIAL_LOOKBACK_DAYS = 60L

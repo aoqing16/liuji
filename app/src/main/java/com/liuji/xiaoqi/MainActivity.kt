@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -44,6 +45,8 @@ import com.liuji.xiaoqi.ima.ImaSyncScheduler
 import com.liuji.xiaoqi.log.AppLog
 import com.liuji.xiaoqi.log.RuntimeLogStore
 import com.liuji.xiaoqi.ui.sync.CloudSyncScreen
+import com.liuji.xiaoqi.ui.theme.ThemeMode
+import com.liuji.xiaoqi.ui.theme.ThemePrefs
 import com.liuji.xiaoqi.ui.theme.留迹Theme
 import kotlinx.coroutines.CoroutineScope
 
@@ -86,6 +89,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 在闪屏解析资源前套用主题偏好，避免暗色模式下仍闪白底
+        ThemePrefs.applyNightMode(this)
         installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -97,9 +102,15 @@ class MainActivity : ComponentActivity() {
         }
         maybeSeedImaFromIntent(intent)
         setContent {
-            留迹Theme {
-                val viewModel: UsageViewModel = viewModel()
-                val state by viewModel.state.collectAsStateWithLifecycle()
+            val viewModel: UsageViewModel = viewModel()
+            val state by viewModel.state.collectAsStateWithLifecycle()
+            val systemDark = isSystemInDarkTheme()
+            val darkTheme = when (state.themeMode) {
+                ThemeMode.LIGHT -> false
+                ThemeMode.DARK -> true
+                ThemeMode.SYSTEM -> systemDark
+            }
+            留迹Theme(darkTheme = darkTheme) {
                 val lifecycleOwner = LocalLifecycleOwner.current
 
                 val canShowDashboard =
@@ -159,6 +170,8 @@ class MainActivity : ComponentActivity() {
 
                     state.screen == AppScreen.SETTINGS -> {
                         SettingsScreen(
+                            themeMode = state.themeMode,
+                            onThemeModeChange = viewModel::setThemeMode,
                             frameEnabled = state.frameRecordingEnabled,
                             frameInterval = state.frameInterval,
                             accessibilityEnabled = state.accessibilityEnabled,
@@ -174,8 +187,6 @@ class MainActivity : ComponentActivity() {
                             onOpenAccessibility = {
                                 startActivity(viewModel.openAccessibilitySettings())
                             },
-                            onRebuildUsage = viewModel::rebuildUsageHistory,
-                            usageRebuilding = state.usageRebuilding,
                             onSaveWebDav = viewModel::saveWebDavAccount,
                             onSyncCloud = viewModel::syncHindsightCloud,
                             onOpenRuntimeLog = viewModel::openRuntimeLog,
@@ -212,6 +223,9 @@ class MainActivity : ComponentActivity() {
                             index = state.frameIndex,
                             loading = state.framesLoading,
                             searchQuery = state.frameSearchQuery,
+                            searchMulti = state.frameSearchMulti,
+                            searchKeywords = state.frameSearchKeywords,
+                            searchMatchAll = state.frameSearchMatchAll,
                             searchScope = state.frameSearchScope,
                             searchPackages = state.frameSearchPackages,
                             searchCategories = state.frameSearchCategories,
@@ -224,6 +238,11 @@ class MainActivity : ComponentActivity() {
                             onBack = viewModel::openDashboard,
                             onIndexChange = viewModel::setFrameIndex,
                             onSearchQueryChange = viewModel::setFrameSearchQuery,
+                            onSearchMultiChange = viewModel::setFrameSearchMulti,
+                            onSearchKeywordChange = viewModel::updateFrameSearchKeyword,
+                            onAddSearchKeyword = viewModel::addFrameSearchKeyword,
+                            onRemoveSearchKeyword = viewModel::removeFrameSearchKeyword,
+                            onSearchMatchAllChange = viewModel::setFrameSearchMatchAll,
                             onSearchScopeChange = viewModel::setFrameSearchScope,
                             onPickSearchPackages = viewModel::setFrameSearchPackages,
                             onLoadSearchCategories = viewModel::loadFrameSearchCategories,
@@ -232,6 +251,7 @@ class MainActivity : ComponentActivity() {
                             onJumpToSearchHit = viewModel::jumpToFrameSearchHit,
                             onSearchPrev = viewModel::frameSearchPrev,
                             onSearchNext = viewModel::frameSearchNext,
+                            onRestoreSearchOrigin = viewModel::restoreFrameSearchOrigin,
                             onLoadDateFrames = viewModel::applyFrameDateFilter,
                             onReloadPeriodFrames = viewModel::clearFrameDateFilter,
                             iconLoader = viewModel::appIcon,

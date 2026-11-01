@@ -22,11 +22,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.automirrored.outlined.Article
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Forum
@@ -128,6 +131,9 @@ fun FrameViewerScreen(
     index: Int,
     loading: Boolean,
     searchQuery: String,
+    searchMulti: Boolean,
+    searchKeywords: List<String>,
+    searchMatchAll: Boolean,
     searchScope: FrameSearchScope,
     searchPackages: Set<String>,
     searchCategories: List<CategoryWithApps>,
@@ -140,6 +146,11 @@ fun FrameViewerScreen(
     onBack: () -> Unit,
     onIndexChange: (Int) -> Unit,
     onSearchQueryChange: (String) -> Unit,
+    onSearchMultiChange: (Boolean) -> Unit,
+    onSearchKeywordChange: (Int, String) -> Unit,
+    onAddSearchKeyword: () -> Unit,
+    onRemoveSearchKeyword: (Int) -> Unit,
+    onSearchMatchAllChange: (Boolean) -> Unit,
     onSearchScopeChange: (FrameSearchScope) -> Unit,
     onPickSearchPackages: (Set<String>) -> Unit,
     onLoadSearchCategories: () -> Unit,
@@ -148,6 +159,7 @@ fun FrameViewerScreen(
     onJumpToSearchHit: (Int) -> Unit,
     onSearchPrev: () -> Unit,
     onSearchNext: () -> Unit,
+    onRestoreSearchOrigin: () -> Boolean,
     onLoadDateFrames: (Long, Int, Int) -> Unit,
     onReloadPeriodFrames: () -> Unit,
     iconLoader: (String) -> android.graphics.drawable.Drawable?,
@@ -206,10 +218,12 @@ fun FrameViewerScreen(
         docSelecting = false
         docSelected = emptySet()
     }
-    BackHandler {
+    BackHandler(enabled = !showSearchDialog && !showAppPicker && fullTextNode == null) {
         if (docSelecting) {
             docSelecting = false
             docSelected = emptySet()
+        } else if (onRestoreSearchOrigin()) {
+            showSearchDialog = true
         } else {
             onBack()
         }
@@ -218,6 +232,9 @@ fun FrameViewerScreen(
     if (showSearchDialog) {
         FrameSearchDialog(
             query = searchQuery,
+            multi = searchMulti,
+            keywords = searchKeywords,
+            matchAll = searchMatchAll,
             searchScope = searchScope,
             pickedCount = searchPackages.size,
             strict = searchStrict,
@@ -229,6 +246,11 @@ fun FrameViewerScreen(
             filterStartMinute = filterStartMinute,
             filterEndMinute = filterEndMinute,
             onQueryChange = onSearchQueryChange,
+            onMultiChange = onSearchMultiChange,
+            onKeywordChange = onSearchKeywordChange,
+            onAddKeyword = onAddSearchKeyword,
+            onRemoveKeyword = onRemoveSearchKeyword,
+            onMatchAllChange = onSearchMatchAllChange,
             onScopeCurrent = { onSearchScopeChange(FrameSearchScope.CURRENT) },
             onScopeAll = { onSearchScopeChange(FrameSearchScope.ALL) },
             onOpenAppPicker = {
@@ -447,12 +469,16 @@ fun FrameViewerScreen(
 
             frame != null -> {
                 val frameHasAnyText = frame.hasAnyText
-                val q = searchQuery.trim()
-                val highlightActive = searchHits.isNotEmpty() && q.isNotEmpty()
+                val searchTerms = if (searchMulti) {
+                    searchKeywords.map { it.trim() }.filter { it.isNotEmpty() }
+                } else {
+                    searchQuery.trim().takeIf { it.isNotEmpty() }?.let { listOf(it) }.orEmpty()
+                }
+                val highlightActive = searchHits.isNotEmpty() && searchTerms.isNotEmpty()
                 // 命中仅在 desc 上时自动展开 desc，便于看到高亮对应文案
                 val forceDescForSearch = highlightActive && frame.texts.any { node ->
-                    !fieldMatches(node.text, q, searchStrict) &&
-                        fieldMatches(node.desc, q, searchStrict)
+                    !fieldMatches(node.text, searchTerms, searchStrict) &&
+                        fieldMatches(node.desc, searchTerms, searchStrict)
                 }
                 // 整帧没有 text 时直接展示 desc，无需点「更多」
                 val effectiveShowDesc = showDesc || !frameHasAnyText || forceDescForSearch
@@ -572,7 +598,7 @@ fun FrameViewerScreen(
                     FrameDocumentView(
                         frame = frame,
                         highlightActive = highlightActive,
-                        query = q,
+                        terms = searchTerms,
                         searchStrict = searchStrict,
                         showDesc = effectiveShowDesc,
                         frameHasAnyText = frameHasAnyText,
@@ -618,14 +644,18 @@ fun FrameViewerScreen(
                 } else {
                     val measurer = rememberTextMeasurer()
                     val density = androidx.compose.ui.platform.LocalDensity.current
+                    val labelColor = TextStrong
+                    val scrimColor = Scrim
+                    val accentStrokeColor = AccentStroke
                     val layout = remember(
                         frame,
                         effectiveShowDesc,
                         canvasSize,
                         highlightActive,
-                        q,
+                        searchTerms,
                         searchStrict,
                         density,
+                        labelColor,
                     ) {
                         computeFrameLayout(
                             frame = frame,
@@ -633,10 +663,11 @@ fun FrameViewerScreen(
                             showDesc = effectiveShowDesc,
                             frameHasAnyText = frameHasAnyText,
                             highlightActive = highlightActive,
-                            query = q,
+                            terms = searchTerms,
                             searchStrict = searchStrict,
                             measurer = measurer,
                             density = density,
+                            labelColor = labelColor,
                         )
                     }
                     Box(
@@ -673,7 +704,7 @@ fun FrameViewerScreen(
                     ) {
                         Canvas(modifier = Modifier.fillMaxSize()) {
                             drawRect(
-                                color = Scrim,
+                                color = scrimColor,
                                 topLeft = Offset(layout.ox, layout.oy),
                                 size = Size(layout.sw * layout.scale, layout.sh * layout.scale),
                                 style = FrameStrokeBorder,
@@ -693,7 +724,7 @@ fun FrameViewerScreen(
                                     )
                                 } else {
                                     drawRect(
-                                        color = AccentStroke,
+                                        color = accentStrokeColor,
                                         topLeft = item.topLeft,
                                         size = item.box,
                                         style = FrameStrokeNormal,
@@ -720,7 +751,7 @@ fun FrameViewerScreen(
 private fun FrameDocumentView(
     frame: UiFrameSnapshot,
     highlightActive: Boolean,
-    query: String,
+    terms: List<String>,
     searchStrict: Boolean,
     showDesc: Boolean,
     frameHasAnyText: Boolean,
@@ -733,8 +764,8 @@ private fun FrameDocumentView(
     onCancelSelection: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val lines = remember(frame, highlightActive, query, searchStrict, showDesc, frameHasAnyText) {
-        buildDocumentLines(frame, highlightActive, query, searchStrict, showDesc, frameHasAnyText)
+    val lines = remember(frame, highlightActive, terms, searchStrict, showDesc, frameHasAnyText) {
+        buildDocumentLines(frame, highlightActive, terms, searchStrict, showDesc, frameHasAnyText)
     }
     Column(
         modifier = modifier
@@ -832,7 +863,7 @@ private data class DocumentLine(
 private fun buildDocumentLines(
     frame: UiFrameSnapshot,
     highlightActive: Boolean,
-    query: String,
+    terms: List<String>,
     searchStrict: Boolean,
     showDesc: Boolean,
     frameHasAnyText: Boolean,
@@ -844,8 +875,8 @@ private fun buildDocumentLines(
                 ?.takeIf { it.isNotEmpty() }
                 ?: return@mapNotNull null
             val matched = highlightActive && (
-                fieldMatches(node.text, query, searchStrict) ||
-                    fieldMatches(node.desc, query, searchStrict)
+                fieldMatches(node.text, terms, searchStrict) ||
+                    fieldMatches(node.desc, terms, searchStrict)
                 )
             DocumentLine(text = text, node = node, matched = matched)
         }
@@ -856,6 +887,9 @@ private fun buildDocumentLines(
 @Composable
 private fun FrameSearchDialog(
     query: String,
+    multi: Boolean,
+    keywords: List<String>,
+    matchAll: Boolean,
     searchScope: FrameSearchScope,
     pickedCount: Int,
     strict: Boolean,
@@ -867,6 +901,11 @@ private fun FrameSearchDialog(
     filterStartMinute: Int,
     filterEndMinute: Int,
     onQueryChange: (String) -> Unit,
+    onMultiChange: (Boolean) -> Unit,
+    onKeywordChange: (Int, String) -> Unit,
+    onAddKeyword: () -> Unit,
+    onRemoveKeyword: (Int) -> Unit,
+    onMatchAllChange: (Boolean) -> Unit,
     onScopeCurrent: () -> Unit,
     onScopeAll: () -> Unit,
     onOpenAppPicker: () -> Unit,
@@ -892,6 +931,26 @@ private fun FrameSearchDialog(
     var showDateFilter by remember { mutableStateOf(false) }
     val startMinute = minuteRange.start.toInt().coerceIn(0, FULL_DAY_END_MINUTE)
     val endMinute = minuteRange.endInclusive.toInt().coerceIn(startMinute, FULL_DAY_END_MINUTE)
+    val hitBringIntoView = remember { BringIntoViewRequester() }
+    LaunchedEffect(hitIndex, hits.size) {
+        if (hitIndex in hits.indices) {
+            hitBringIntoView.bringIntoView()
+        }
+    }
+    val fieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = TextStrong,
+        unfocusedTextColor = TextStrong,
+        focusedContainerColor = SurfaceMuted,
+        unfocusedContainerColor = SurfaceMuted,
+        cursorColor = Accent,
+        focusedBorderColor = Accent,
+        unfocusedBorderColor = TextMuted.copy(alpha = 0.4f),
+        focusedLabelColor = TextMuted,
+        unfocusedLabelColor = TextMuted,
+        focusedPlaceholderColor = TextMuted,
+        unfocusedPlaceholderColor = TextMuted,
+    )
+    val keywordRows = if (keywords.isEmpty()) listOf("") else keywords
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = CardBackground,
@@ -906,27 +965,68 @@ private fun FrameSearchDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(Space.sm),
             ) {
-                OutlinedTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    label = { Text("关键词或记录编号") },
-                    placeholder = { Text("例如：微信 / 123") },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = TextStrong,
-                        unfocusedTextColor = TextStrong,
-                        focusedContainerColor = SurfaceMuted,
-                        unfocusedContainerColor = SurfaceMuted,
-                        cursorColor = Accent,
-                        focusedBorderColor = Accent,
-                        unfocusedBorderColor = TextMuted.copy(alpha = 0.4f),
-                        focusedLabelColor = TextMuted,
-                        unfocusedLabelColor = TextMuted,
-                        focusedPlaceholderColor = TextMuted,
-                        unfocusedPlaceholderColor = TextMuted,
-                    ),
-                )
+                Text("关键词", color = TextMuted, fontSize = 12.sp)
+                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                    FilterChip(
+                        selected = !multi,
+                        onClick = { onMultiChange(false) },
+                        label = { Text("单个") },
+                    )
+                    FilterChip(
+                        selected = multi,
+                        onClick = { onMultiChange(true) },
+                        label = { Text("多个") },
+                    )
+                }
+                if (!multi) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("关键词或记录编号") },
+                        placeholder = { Text("例如：微信 / 123") },
+                        colors = fieldColors,
+                    )
+                } else {
+                    keywordRows.forEachIndexed { index, value ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = value,
+                                onValueChange = { onKeywordChange(index, it) },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                label = { Text("关键词 ${index + 1}") },
+                                placeholder = { Text("输入关键词") },
+                                colors = fieldColors,
+                            )
+                            if (keywordRows.size > 1) {
+                                IconButton(onClick = { onRemoveKeyword(index) }) {
+                                    Icon(
+                                        Icons.Outlined.Close,
+                                        contentDescription = "删除关键词",
+                                        tint = TextMuted,
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    TextButton(onClick = onAddKeyword) {
+                        Text("添加关键词", color = Accent)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
+                        FilterChip(
+                            selected = !matchAll,
+                            onClick = { onMatchAllChange(false) },
+                            label = { Text("或") },
+                        )
+                        FilterChip(
+                            selected = matchAll,
+                            onClick = { onMatchAllChange(true) },
+                            label = { Text("且") },
+                        )
+                    }
+                }
                 Text("范围", color = TextMuted, fontSize = 12.sp)
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(Space.sm),
@@ -992,6 +1092,13 @@ private fun FrameSearchDialog(
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
+                                .then(
+                                    if (selected) {
+                                        Modifier.bringIntoViewRequester(hitBringIntoView)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
                                 .clip(RoundedCornerShape(Radius.sm))
                                 .background(if (selected) AccentSoft else Color.Transparent)
                                 .clickable { onJump(i) }
@@ -1111,9 +1218,11 @@ private fun FrameSearchDialog(
     }
 }
 
-private fun fieldMatches(field: String, query: String, strict: Boolean): Boolean {
-    if (field.isBlank() || query.isBlank()) return false
-    return if (strict) field.contains(query) else field.contains(query, ignoreCase = true)
+private fun fieldMatches(field: String, terms: List<String>, strict: Boolean): Boolean {
+    if (field.isBlank() || terms.isEmpty()) return false
+    return terms.any { term ->
+        if (strict) field.contains(term) else field.contains(term, ignoreCase = true)
+    }
 }
 
 private val FrameStrokeBorder = Stroke(width = 2f)
@@ -1148,10 +1257,11 @@ private fun computeFrameLayout(
     showDesc: Boolean,
     frameHasAnyText: Boolean,
     highlightActive: Boolean,
-    query: String,
+    terms: List<String>,
     searchStrict: Boolean,
     measurer: androidx.compose.ui.text.TextMeasurer,
     density: androidx.compose.ui.unit.Density,
+    labelColor: Color,
 ): FrameHitLayout {
     if (canvasSize.width <= 0 || canvasSize.height <= 0) {
         return FrameHitLayout(emptyList(), emptyList(), 1f, 0f, 0f, 1f, 1f)
@@ -1165,8 +1275,8 @@ private fun computeFrameLayout(
     val drawItems = ArrayList<FrameDrawItem>()
     for (node in frame.texts) {
         val matched = highlightActive && (
-            fieldMatches(node.text, query, searchStrict) ||
-                fieldMatches(node.desc, query, searchStrict)
+            fieldMatches(node.text, terms, searchStrict) ||
+                fieldMatches(node.desc, terms, searchStrict)
             )
         val label = FrameJson.displayLabel(node, showDesc, frameHasAnyText)
         if (label == null && !matched) continue
@@ -1182,7 +1292,7 @@ private fun computeFrameLayout(
             measurer.measure(
                 text = label,
                 style = TextStyle(
-                    color = TextStrong,
+                    color = labelColor,
                     fontSize = with(density) { fontPx.toSp() },
                     fontWeight = if (matched) FontWeight.Bold else FontWeight.Normal,
                 ),

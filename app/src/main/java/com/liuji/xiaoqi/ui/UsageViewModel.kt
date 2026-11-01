@@ -28,6 +28,8 @@ import com.liuji.xiaoqi.hindsight.HindsightIconStore
 import com.liuji.xiaoqi.hindsight.HindsightSync
 import com.liuji.xiaoqi.hindsight.WebDavAccount
 import com.liuji.xiaoqi.hindsight.db.HindsightDatabase
+import com.liuji.xiaoqi.ui.theme.ThemeMode
+import com.liuji.xiaoqi.ui.theme.ThemePrefs
 import com.liuji.xiaoqi.ima.ImaSyncPrefs
 import com.liuji.xiaoqi.ima.ImaSyncRepository
 import com.liuji.xiaoqi.log.AppLog
@@ -128,7 +130,6 @@ data class UsageUiState(
     val loading: Boolean = true,
     val refreshing: Boolean = false,
     val cloudSyncing: Boolean = false,
-    val usageRebuilding: Boolean = false,
     val exporting: Boolean = false,
     val showExportDialog: Boolean = false,
     val summary: PeriodSummary? = null,
@@ -138,6 +139,7 @@ data class UsageUiState(
     val error: String? = null,
     val message: String? = null,
     // settings
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val frameRecordingEnabled: Boolean = false,
     val frameInterval: FrameInterval = FrameInterval.S30,
     val accessibilityEnabled: Boolean = false,
@@ -166,6 +168,10 @@ data class UsageUiState(
     val frameIndex: Int = 0,
     val framesLoading: Boolean = false,
     val frameSearchQuery: String = "",
+    val frameSearchMulti: Boolean = false,
+    val frameSearchKeywords: List<String> = listOf(""),
+    /** true=每个关键词都要出现；false=任一关键词即可 */
+    val frameSearchMatchAll: Boolean = false,
     val frameSearchScope: FrameSearchScope = FrameSearchScope.CURRENT,
     val frameSearchPackages: Set<String> = emptySet(),
     val frameSearchCategories: List<CategoryWithApps> = emptyList(),
@@ -204,7 +210,9 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     private val hindsightAggregator = HindsightAggregator(application)
     private val hindsightIcons = HindsightIconStore(application)
 
-    private val _state = MutableStateFlow(UsageUiState())
+    private val _state = MutableStateFlow(
+        UsageUiState(themeMode = ThemePrefs.read(application)),
+    )
     val state: StateFlow<UsageUiState> = _state.asStateFlow()
 
     private val _exportEvents = MutableSharedFlow<ExportEvent>(extraBufferCapacity = 1)
@@ -220,6 +228,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     /** 最近一次看板成功加载的本地日 / 时刻，供回前台判断是否过期 */
     private var lastLoadedLocalDate: java.time.LocalDate? = null
     private var lastLoadedAt: Long = 0L
+    private var frameSearchAnchor: FrameSearchAnchor? = null
 
     init {
         // refreshPermissionAndData() 内部已调用 loadSettings()，避免启动期双倍 Room IO
@@ -722,46 +731,6 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    /** 清空本地用量会话并全量重采（修复跨午夜 0 点缺失）。 */
-    fun rebuildUsageHistory() {
-        if (_state.value.usageRebuilding) return
-        viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    usageRebuilding = true,
-                    message = null,
-                    error = null,
-                    dataSource = DataSource.PHONE,
-                    period = StatsPeriod.DAY,
-                    offset = 0,
-                )
-            }
-            try {
-                timelineLoadedOffset = null
-                val summary = withContext(Dispatchers.IO) {
-                    repository.clearLocalUsageForResync()
-                    repository.loadSummary(StatsPeriod.DAY, 0)
-                }
-                _state.update {
-                    it.copy(
-                        usageRebuilding = false,
-                        loading = false,
-                        summary = summary,
-                        screen = AppScreen.DASHBOARD,
-                        message = "用量已重建，请查看今日 0 点柱状图",
-                    )
-                }
-            } catch (e: Exception) {
-                _state.update {
-                    it.copy(
-                        usageRebuilding = false,
-                        error = e.message ?: "重建用量失败",
-                    )
-                }
-            }
-        }
-    }
-
     fun openDashboard() {
         _state.update {
             it.copy(
@@ -777,6 +746,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 frameSearchLoading = false,
             )
         }
+        frameSearchAnchor = null
     }
 
     fun openHindsightAppDetail(app: AppUsageItem) {
@@ -1098,6 +1068,18 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun setThemeMode(mode: ThemeMode) {
+        if (_state.value.themeMode == mode) return
+        _state.update { it.copy(themeMode = mode) }
+        ThemePrefs.write(getApplication(), mode)
+        ThemePrefs.applyNightMode(getApplication(), mode)
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                repository.updateThemeMode(mode.storageValue)
+            }
+        }
+    }
+
     fun setFrameRecordingEnabled(enabled: Boolean) {
         viewModelScope.launch {
             val interval = _state.value.frameInterval
@@ -1330,6 +1312,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 frameSearchHitIndex = 0,
                 frameSearchMessage = null,
                 frameSearchQuery = "",
+                frameSearchKeywords = listOf(""),
             )
         }
         viewModelScope.launch {
@@ -1361,6 +1344,52 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setFrameSearchQuery(query: String) {
         _state.update { it.copy(frameSearchQuery = query, frameSearchMessage = null) }
+    }
+
+    fun setFrameSearchMulti(enabled: Boolean) {
+        _state.update { state ->
+            val keywords = if (!enabled) {
+                state.frameSearchKeywords
+            } else if (state.frameSearchKeywords.all { it.isBlank() }) {
+                val seeded = state.frameSearchQuery.trim()
+                if (seeded.isEmpty()) listOf("") else listOf(seeded)
+            } else {
+                state.frameSearchKeywords
+            }
+            state.copy(
+                frameSearchMulti = enabled,
+                frameSearchKeywords = keywords,
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    fun updateFrameSearchKeyword(index: Int, value: String) {
+        _state.update { state ->
+            if (index !in state.frameSearchKeywords.indices) return@update state
+            val next = state.frameSearchKeywords.toMutableList()
+            next[index] = value
+            state.copy(frameSearchKeywords = next, frameSearchMessage = null)
+        }
+    }
+
+    fun addFrameSearchKeyword() {
+        _state.update { it.copy(frameSearchKeywords = it.frameSearchKeywords + "") }
+    }
+
+    fun removeFrameSearchKeyword(index: Int) {
+        _state.update { state ->
+            if (state.frameSearchKeywords.size <= 1) return@update state
+            if (index !in state.frameSearchKeywords.indices) return@update state
+            state.copy(
+                frameSearchKeywords = state.frameSearchKeywords.filterIndexed { i, _ -> i != index },
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    fun setFrameSearchMatchAll(matchAll: Boolean) {
+        _state.update { it.copy(frameSearchMatchAll = matchAll, frameSearchMessage = null) }
     }
 
     fun setFrameSearchScope(scope: FrameSearchScope) {
@@ -1468,8 +1497,14 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun runFrameSearch() {
+        val multi = _state.value.frameSearchMulti
         val query = _state.value.frameSearchQuery.trim()
-        if (query.isEmpty()) {
+        val terms = if (multi) {
+            _state.value.frameSearchKeywords.map { it.trim() }.filter { it.isNotEmpty() }
+        } else {
+            listOfNotNull(query.takeIf { it.isNotEmpty() })
+        }
+        if (terms.isEmpty()) {
             _state.update {
                 it.copy(
                     frameSearchHits = emptyList(),
@@ -1500,13 +1535,21 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         val strict = _state.value.frameSearchStrict
+        val matchAll = multi && _state.value.frameSearchMatchAll
         _state.update {
             it.copy(frameSearchLoading = true, frameSearchMessage = null)
         }
         viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.searchFrames(query, scopePackages, strict)
+                    repository.searchFrames(
+                        query = query,
+                        scopePackages = scopePackages,
+                        strict = strict,
+                        terms = terms,
+                        matchAll = matchAll,
+                        allowFrameId = !multi,
+                    )
                 }
             }.onSuccess { hits ->
                 _state.update {
@@ -1551,6 +1594,15 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         if (hits.isEmpty()) return
         val i = index.coerceIn(0, hits.lastIndex)
         val hit = hits[i]
+        if (frameSearchAnchor == null) {
+            val current = _state.value
+            frameSearchAnchor = FrameSearchAnchor(
+                packageName = current.frameAppPackage,
+                label = current.frameAppLabel,
+                frames = current.frames,
+                index = current.frameIndex,
+            )
+        }
         _state.update { it.copy(frameSearchHitIndex = i) }
         val currentPkg = _state.value.frameAppPackage
         val alreadyLoaded = currentPkg == hit.packageName &&
@@ -1593,6 +1645,23 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** 系统返回：回到这次搜索跳转前的画面。没有记录时返回 false。 */
+    fun restoreFrameSearchOrigin(): Boolean {
+        val anchor = frameSearchAnchor ?: return false
+        frameSearchAnchor = null
+        val index = anchor.index.coerceIn(0, (anchor.frames.size - 1).coerceAtLeast(0))
+        _state.update {
+            it.copy(
+                frameAppPackage = anchor.packageName,
+                frameAppLabel = anchor.label,
+                frames = anchor.frames,
+                frameIndex = index,
+                framesLoading = false,
+            )
+        }
+        return true
+    }
+
     fun openUsageAccessSettings() = repository.usageAccessSettingsIntent()
 
     fun openAccessibilitySettings() = repository.accessibilitySettingsIntent()
@@ -1622,8 +1691,13 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             val app = getApplication<Application>()
             val a11y = FrameCaptureAccessibilityService.isEnabled(app)
             val legacy = FrameCaptureAccessibilityService.isLegacyServiceListed(app)
+            val themeMode = ThemeMode.fromStorage(settings.themeMode)
+            // 把库里的主题同步到启动用缓存（升级后首次打开也能对上）
+            ThemePrefs.write(app, themeMode)
+            ThemePrefs.applyNightMode(app, themeMode)
             _state.update {
                 it.copy(
+                    themeMode = themeMode,
                     frameRecordingEnabled = settings.frameRecordingEnabled,
                     frameInterval = FrameInterval.fromMillis(settings.frameIntervalMs),
                     accessibilityEnabled = a11y,
@@ -1740,3 +1814,10 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         const val RESUME_REFRESH_STALE_MS = 60_000L
     }
 }
+
+private data class FrameSearchAnchor(
+    val packageName: String?,
+    val label: String,
+    val frames: List<UiFrameSnapshot>,
+    val index: Int,
+)

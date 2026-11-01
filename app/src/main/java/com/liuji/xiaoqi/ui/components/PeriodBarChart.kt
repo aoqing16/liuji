@@ -24,6 +24,7 @@ import com.liuji.xiaoqi.data.Categories
 import com.liuji.xiaoqi.data.DayBucket
 import com.liuji.xiaoqi.ui.theme.TextMuted
 import com.liuji.xiaoqi.ui.theme.TextStrong
+import com.liuji.xiaoqi.ui.theme.Track
 import com.liuji.xiaoqi.ui.util.formatDuration
 import com.liuji.xiaoqi.ui.util.formatWeekday
 import java.time.LocalDate
@@ -59,7 +60,7 @@ fun PeriodBarChart(
                         .weight(1f)
                         .height(18.dp)
                         .clip(RoundedCornerShape(6.dp))
-                        .background(androidx.compose.ui.graphics.Color(0xFFF1F3F7)),
+                        .background(Track),
                 ) {
                     if (day.totalMillis > 0) {
                         Row(

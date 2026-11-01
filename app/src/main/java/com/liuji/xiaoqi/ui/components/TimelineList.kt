@@ -41,6 +41,7 @@ import com.liuji.xiaoqi.ui.theme.CardBackground
 import com.liuji.xiaoqi.ui.theme.SurfaceChip
 import com.liuji.xiaoqi.ui.theme.TextMuted
 import com.liuji.xiaoqi.ui.theme.TextStrong
+import com.liuji.xiaoqi.ui.theme.TextTimeFaint
 import com.liuji.xiaoqi.ui.util.formatDuration
 import com.liuji.xiaoqi.ui.util.formatDurationPrecise
 import java.time.Instant
@@ -53,8 +54,6 @@ private val zone: ZoneId = ZoneId.systemDefault()
 private val hm = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(zone)
 private val hourFmt = DateTimeFormatter.ofPattern("HH:00").withZone(zone)
 private val minuteFmt = DateTimeFormatter.ofPattern("HH:mm").withZone(zone)
-private val TimeFaint = com.liuji.xiaoqi.ui.theme.TextTimeFaint
-
 data class TimelineBucketApp(
     val packageName: String,
     val label: String,
@@ -368,7 +367,7 @@ private fun TimelineEdge(
         Spacer(Modifier.width(8.dp))
         Text(
             text = verb,
-            color = TimeFaint,
+            color = TextTimeFaint,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
         )

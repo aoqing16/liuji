@@ -53,6 +53,8 @@ data class AppSettingsEntity(
     @ColumnInfo(name = "frame_recording_enabled") val frameRecordingEnabled: Boolean = false,
     /** 帧记录间隔毫秒：0=操作变化；5000 / 10000 / 30000 / 60000 / 300000=定时 */
     @ColumnInfo(name = "frame_interval_ms") val frameIntervalMs: Long = 30_000L,
+    /** 外观：system / light / dark */
+    @ColumnInfo(name = "theme_mode") val themeMode: String = "system",
 )
 
 /**

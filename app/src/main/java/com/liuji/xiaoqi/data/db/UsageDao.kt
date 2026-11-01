@@ -37,6 +37,16 @@ interface UsageDao {
     )
     suspend fun deleteStartingInRange(startMillis: Long, endMillis: Long)
 
+    /** 跨 rewriteStart 的本地段收到窗缘，避免与窗内新插入重叠双计 */
+    @Query(
+        """
+        UPDATE usage_sessions
+        SET end_millis = :rewriteStart
+        WHERE start_millis < :rewriteStart AND end_millis > :rewriteStart
+        """,
+    )
+    suspend fun clipSessionsCrossing(rewriteStart: Long)
+
     @Insert
     suspend fun insertSessions(sessions: List<UsageSessionEntity>)
 
@@ -46,6 +56,7 @@ interface UsageDao {
         endMillis: Long,
         sessions: List<UsageSessionEntity>,
     ) {
+        clipSessionsCrossing(startMillis)
         deleteStartingInRange(startMillis, endMillis)
         if (sessions.isNotEmpty()) {
             insertSessions(sessions)
@@ -103,12 +114,6 @@ interface UsageDao {
 
     @Query("SELECT COUNT(*) FROM usage_sessions")
     suspend fun sessionCount(): Long
-
-    @Query("DELETE FROM usage_sessions")
-    suspend fun deleteAllSessions()
-
-    @Query("DELETE FROM sync_state")
-    suspend fun clearSyncState()
 
     // ── settings ──
 
