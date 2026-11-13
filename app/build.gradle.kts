@@ -23,8 +23,8 @@ android {
         applicationId = "com.liuji.xiaoqi"
         minSdk = 26
         targetSdk = 37
-        versionCode = 5
-        versionName = "1.0.4"
+        versionCode = 6
+        versionName = "1.0.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -80,6 +80,8 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+    // 平台 SQLite 未编入 FTS5；固定使用 requery 自带 SQLite（构建期确定，运行时不切换）
+    implementation(libs.requery.sqlite.android)
     implementation(libs.okhttp)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.work.runtime.ktx)

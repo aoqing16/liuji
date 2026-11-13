@@ -4,7 +4,9 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.RawQuery
 import androidx.room.Transaction
+import androidx.sqlite.db.SupportSQLiteQuery
 
 @Dao
 interface UsageDao {
@@ -47,20 +49,57 @@ interface UsageDao {
     )
     suspend fun clipSessionsCrossing(rewriteStart: Long)
 
+    @Query(
+        """
+        UPDATE usage_sessions
+        SET end_millis = :rewriteStart
+        WHERE start_millis < :rewriteStart AND end_millis > :rewriteStart
+          AND package_name IN (:packages)
+        """,
+    )
+    suspend fun clipSessionsCrossingForPackages(rewriteStart: Long, packages: List<String>)
+
+    @Query(
+        """
+        DELETE FROM usage_sessions
+        WHERE start_millis >= :startMillis AND start_millis < :endMillis
+          AND package_name IN (:packages)
+        """,
+    )
+    suspend fun deleteStartingInRangeForPackages(
+        startMillis: Long,
+        endMillis: Long,
+        packages: List<String>,
+    )
+
     @Insert
     suspend fun insertSessions(sessions: List<UsageSessionEntity>)
 
+    /**
+     * 只增不减：仅替换本批 [sessions] 中出现过的包名；
+     * 系统已不返回的包（本地仍有）完整保留。空列表不删不裁。
+     */
+    @Transaction
+    suspend fun mergeSessionsInRange(
+        startMillis: Long,
+        endMillis: Long,
+        sessions: List<UsageSessionEntity>,
+    ) {
+        val packages = sessions.map { it.packageName }.distinct()
+        if (packages.isEmpty()) return
+        clipSessionsCrossingForPackages(startMillis, packages)
+        deleteStartingInRangeForPackages(startMillis, endMillis, packages)
+        insertSessions(sessions)
+    }
+
+    /** @deprecated 整窗清空不安全；请用 [mergeSessionsInRange] */
     @Transaction
     suspend fun replaceSessionsInRange(
         startMillis: Long,
         endMillis: Long,
         sessions: List<UsageSessionEntity>,
     ) {
-        clipSessionsCrossing(startMillis)
-        deleteStartingInRange(startMillis, endMillis)
-        if (sessions.isNotEmpty()) {
-            insertSessions(sessions)
-        }
+        mergeSessionsInRange(startMillis, endMillis, sessions)
     }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -216,11 +255,124 @@ interface UsageDao {
     @Query("SELECT COUNT(*) FROM ui_frames WHERE package_name = :packageName")
     suspend fun countFramesForPackage(packageName: String): Long
 
+    @Query(
+        """
+        SELECT COUNT(*) FROM ui_frames
+        WHERE package_name = :packageName
+          AND captured_at >= :startMillis AND captured_at < :endMillis
+        """,
+    )
+    suspend fun countFramesForPackageInRange(
+        packageName: String,
+        startMillis: Long,
+        endMillis: Long,
+    ): Long
+
     @Query("SELECT COUNT(*) FROM ui_frames")
     suspend fun frameCount(): Long
 
     @Query("SELECT DISTINCT package_name FROM ui_frames")
     suspend fun distinctFramePackages(): List<String>
+
+    /** FTS / LIKE 分页；SQL 由 FrameFtsQuery 组装 */
+    @RawQuery
+    suspend fun searchFramesRaw(query: SupportSQLiteQuery): List<FrameSearchPageRow>
+
+    @RawQuery
+    suspend fun countFramesRaw(query: SupportSQLiteQuery): Long
+
+    /** 旧路径分批扫描：只取投影，按时间倒序游标翻页，避免一次性装入全部帧 */
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE (captured_at < :beforeAt OR (captured_at = :beforeAt AND id < :beforeId))
+        ORDER BY captured_at DESC, id DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionBefore(
+        beforeAt: Long,
+        beforeId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
+
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE package_name = :packageName
+          AND (captured_at < :beforeAt OR (captured_at = :beforeAt AND id < :beforeId))
+        ORDER BY captured_at DESC, id DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionForPackageBefore(
+        packageName: String,
+        beforeAt: Long,
+        beforeId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
+
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE package_name IN (:packages)
+          AND (captured_at < :beforeAt OR (captured_at = :beforeAt AND id < :beforeId))
+        ORDER BY captured_at DESC, id DESC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionForPackagesBefore(
+        packages: List<String>,
+        beforeAt: Long,
+        beforeId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
+
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE (captured_at > :afterAt OR (captured_at = :afterAt AND id > :afterId))
+        ORDER BY captured_at ASC, id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionAfter(
+        afterAt: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
+
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE package_name = :packageName
+          AND (captured_at > :afterAt OR (captured_at = :afterAt AND id > :afterId))
+        ORDER BY captured_at ASC, id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionForPackageAfter(
+        packageName: String,
+        afterAt: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
+
+    @Query(
+        """
+        SELECT id, package_name, captured_at, texts_json FROM ui_frames
+        WHERE package_name IN (:packages)
+          AND (captured_at > :afterAt OR (captured_at = :afterAt AND id > :afterId))
+        ORDER BY captured_at ASC, id ASC
+        LIMIT :limit
+        """,
+    )
+    suspend fun getFrameSearchProjectionForPackagesAfter(
+        packages: List<String>,
+        afterAt: Long,
+        afterId: Long,
+        limit: Int,
+    ): List<FrameSearchPageRow>
 
     // ── frame blacklist ──
 

@@ -35,7 +35,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Today
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -81,11 +80,16 @@ import com.liuji.xiaoqi.ui.TimelineGranularity
 import com.liuji.xiaoqi.ui.UsageUiState
 import com.liuji.xiaoqi.ui.components.clipTimeline
 import com.liuji.xiaoqi.ui.effectiveTimelineGranularity
+import com.liuji.xiaoqi.ui.components.AppListSkeleton
 import com.liuji.xiaoqi.ui.components.AppRankedList
 import com.liuji.xiaoqi.ui.components.CategoryLegend
+import com.liuji.xiaoqi.ui.components.CategoryListSkeleton
 import com.liuji.xiaoqi.ui.components.CategoryRankedList
+import com.liuji.xiaoqi.ui.components.ChartSkeleton
 import com.liuji.xiaoqi.ui.components.HourlyChart
 import com.liuji.xiaoqi.ui.components.PeriodBarChart
+import com.liuji.xiaoqi.ui.components.SkeletonBar
+import com.liuji.xiaoqi.ui.components.TimelineListSkeleton
 import com.liuji.xiaoqi.ui.components.bucketTimeline
 import com.liuji.xiaoqi.ui.components.timelineItems
 import com.liuji.xiaoqi.ui.theme.Accent
@@ -128,7 +132,6 @@ fun DashboardScreen(
     onExportPeriod: (StatsPeriod, Boolean) -> Unit,
     onExportDateRange: (LocalDate, LocalDate, Boolean) -> Unit = { _, _, _ -> },
     onMessageShown: () -> Unit,
-    onOpenSettings: () -> Unit,
     onCategoryClick: ((com.liuji.xiaoqi.data.CategoryUsageItem) -> Unit)? = null,
     onDayViewMode: (DayViewMode) -> Unit,
     onTimelineGranularity: (TimelineGranularity) -> Unit = {},
@@ -209,7 +212,7 @@ fun DashboardScreen(
         containerColor = androidx.compose.ui.graphics.Color.Transparent,
         snackbarHost = { SnackbarHost(snackbarHostState) },
     ) { padding ->
-        val summary = state.summary
+        val summary = state.summary?.takeIf { it.period == state.period }
         val showTimeline =
             state.period == StatsPeriod.DAY && state.dayViewMode == DayViewMode.TIMELINE
         val drill = state.timelineDrillStack.lastOrNull()
@@ -239,12 +242,13 @@ fun DashboardScreen(
         LaunchedEffect(state.dashboardAppQuery, state.period, showTimeline, summary != null) {
             val query = state.dashboardAppQuery.trim()
             if (query.isEmpty() || summary == null) return@LaunchedEffect
+            // header + period-toggle + data-source (+ day-mode) 之后才是应用列表卡片
             val index = if (showTimeline) {
-                3
-            } else if (state.period == StatsPeriod.DAY) {
                 4
+            } else if (state.period == StatsPeriod.DAY) {
+                5
             } else {
-                3
+                4
             }
             snapshotFlow { listState.layoutInfo.totalItemsCount }.first { it > index }
             listState.animateScrollToItem(index)
@@ -252,10 +256,14 @@ fun DashboardScreen(
         LazyColumn(
             state = listState,
             flingBehavior = if (showTimeline) flingBehavior else ScrollableDefaults.flingBehavior(),
-            // 横向切换手势只挂在 header，避免与整表纵向滚动抢指针导致卡顿
+            // 整页可左右滑切换日/周/月；手势在确认横向后才接管，不挡纵向滚动
             // 本 App 自带无障碍服务时，隐藏列表 Semantics 可大幅降低滚动时的 a11y 广播开销
             modifier = Modifier
                 .fillMaxSize()
+                .horizontalPeriodSwipe(
+                    onSwipeLeft = { onShiftPeriod(1) },
+                    onSwipeRight = { onShiftPeriod(-1) },
+                )
                 .semantics { hideFromAccessibility() },
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -266,10 +274,14 @@ fun DashboardScreen(
                     summary = summary,
                     exporting = state.exporting,
                     onExportClick = onOpenExport,
-                    onSettingsClick = onOpenSettings,
                     onAppQueryChange = onDashboardAppQuery,
-                    onSwipeLeft = { onShiftPeriod(1) },
-                    onSwipeRight = { onShiftPeriod(-1) },
+                )
+            }
+
+            item(key = "period-toggle") {
+                PeriodToggle(
+                    period = state.period,
+                    onPeriod = onPeriodChange,
                 )
             }
 
@@ -349,14 +361,7 @@ fun DashboardScreen(
                 }
                 if (state.timelineLoading && state.timeline.isEmpty()) {
                     item(key = "timeline-loading") {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(120.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
-                        }
+                        TimelineListSkeleton(rows = 6)
                     }
                 } else {
                     timelineItems(
@@ -379,14 +384,14 @@ fun DashboardScreen(
                 }
 
                 if (state.loading && summary == null) {
-                    item(key = "loading") {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(160.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(color = Accent)
+                    item(key = "apps-skeleton") {
+                        DashboardCard(title = "最常用应用") {
+                            AppListSkeleton(rows = 8)
+                        }
+                    }
+                    item(key = "cats-skeleton") {
+                        DashboardCard(title = "最常用分类") {
+                            CategoryListSkeleton(rows = 5)
                         }
                     }
                 }
@@ -551,6 +556,41 @@ private fun DataSourceToggle(
 }
 
 @Composable
+private fun PeriodToggle(
+    period: StatsPeriod,
+    onPeriod: (StatsPeriod) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(CardBackground)
+            .border(1.dp, BorderDefault, RoundedCornerShape(12.dp))
+            .padding(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        ModeChip(
+            text = "日",
+            selected = period == StatsPeriod.DAY,
+            onClick = { onPeriod(StatsPeriod.DAY) },
+            modifier = Modifier.weight(1f),
+        )
+        ModeChip(
+            text = "周",
+            selected = period == StatsPeriod.WEEK,
+            onClick = { onPeriod(StatsPeriod.WEEK) },
+            modifier = Modifier.weight(1f),
+        )
+        ModeChip(
+            text = "月",
+            selected = period == StatsPeriod.MONTH,
+            onClick = { onPeriod(StatsPeriod.MONTH) },
+            modifier = Modifier.weight(1f),
+        )
+    }
+}
+
+@Composable
 private fun DayModeToggle(
     mode: DayViewMode,
     onMode: (DayViewMode) -> Unit,
@@ -693,10 +733,7 @@ private fun HeaderBlock(
     summary: PeriodSummary?,
     exporting: Boolean,
     onExportClick: () -> Unit,
-    onSettingsClick: () -> Unit,
     onAppQueryChange: (String) -> Unit,
-    onSwipeLeft: () -> Unit = {},
-    onSwipeRight: () -> Unit = {},
 ) {
     val title = when (state.period) {
         StatsPeriod.DAY -> "日统计"
@@ -707,24 +744,20 @@ private fun HeaderBlock(
         DataSource.PHONE -> "手机"
         DataSource.HINDSIGHT_CLOUD -> "电脑·只读"
     }
+    val matchedSummary = summary?.takeIf { it.period == state.period }
     val subtitle = when {
-        summary == null -> ""
-        state.period == StatsPeriod.DAY -> "${formatFullDate(summary.rangeStart)} · $sourceTag"
+        matchedSummary == null -> ""
+        state.period == StatsPeriod.DAY -> "${formatFullDate(matchedSummary.rangeStart)} · $sourceTag"
         else -> {
-            val avg = formatDuration(summary.averageDailyMillis)
-            "${formatMonthDay(summary.rangeStart)} – ${formatMonthDay(summary.rangeEnd)} · 日均 $avg · $sourceTag"
+            val avg = formatDuration(matchedSummary.averageDailyMillis)
+            "${formatMonthDay(matchedSummary.rangeStart)} – ${formatMonthDay(matchedSummary.rangeEnd)} · 日均 $avg · $sourceTag"
         }
     }
     var searchExpanded by remember {
         mutableStateOf(state.dashboardAppQuery.isNotBlank())
     }
 
-    Column(
-        modifier = Modifier.horizontalPeriodSwipe(
-            onSwipeLeft = onSwipeLeft,
-            onSwipeRight = onSwipeRight,
-        ),
-    ) {
+    Column {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
@@ -769,12 +802,9 @@ private fun HeaderBlock(
                     tint = Accent,
                 )
             }
-            IconButton(onClick = onSettingsClick) {
-                Icon(Icons.Outlined.Settings, contentDescription = "设置", tint = Accent)
-            }
             IconButton(
                 onClick = onExportClick,
-                enabled = !exporting && summary != null,
+                enabled = !exporting && matchedSummary != null,
             ) {
                 Icon(
                     imageVector = Icons.Outlined.FileUpload,
@@ -807,15 +837,21 @@ private fun HeaderBlock(
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
         )
-        if (subtitle.isNotBlank()) {
-            Spacer(Modifier.height(Space.xxs))
-            Text(text = subtitle, color = TextMuted, fontSize = 13.sp)
+        when {
+            subtitle.isNotBlank() -> {
+                Spacer(Modifier.height(Space.xxs))
+                Text(text = subtitle, color = TextMuted, fontSize = 13.sp)
+            }
+            state.loading && matchedSummary == null -> {
+                Spacer(Modifier.height(Space.xxs))
+                SkeletonBar(width = 180.dp, height = 12.dp)
+            }
         }
         Spacer(Modifier.height(2.dp))
         Text(
             text = when (state.dataSource) {
-                DataSource.PHONE -> "左右滑切换 日/周/月 · 下拉刷新本机数据"
-                DataSource.HINDSIGHT_CLOUD -> "左右滑切换 日/周/月 · 下拉从云盘只读拉取"
+                DataSource.PHONE -> "点上方日/周/月，或左右滑切换 · 下拉刷新"
+                DataSource.HINDSIGHT_CLOUD -> "点上方日/周/月，或左右滑切换 · 下拉同步云盘"
             },
             color = TextMuted,
             fontSize = 11.sp,
@@ -841,6 +877,7 @@ private fun ChartCard(
     onOpenCalendar: () -> Unit,
     onSelectHour: (Int?) -> Unit,
 ) {
+    val matched = summary?.takeIf { it.period == state.period }
     DashboardCard(
         title = when (state.period) {
             StatsPeriod.DAY -> "24 小时活动分布"
@@ -858,34 +895,27 @@ private fun ChartCard(
         },
     ) {
         when {
-            summary == null && state.loading -> {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(180.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
-                }
+            matched == null && state.loading -> {
+                ChartSkeleton(period = state.period)
             }
 
-            summary == null -> {
+            matched == null -> {
                 Text("暂无数据", color = TextMuted, fontSize = 13.sp)
             }
 
             state.period == StatsPeriod.DAY -> {
                 HourlyChart(
-                    hours = summary.hours,
+                    hours = matched.hours,
                     selectedHour = state.selectedHour,
                     onHourClick = { onSelectHour(it) },
                 )
                 Spacer(Modifier.height(12.dp))
-                CategoryLegend(categoryIds = summary.categories.map { it.categoryId })
+                CategoryLegend(categoryIds = matched.categories.map { it.categoryId })
             }
 
             else -> {
                 PeriodBarChart(
-                    days = summary.dayBuckets,
+                    days = matched.dayBuckets,
                     labelFor = {
                         if (state.period == StatsPeriod.MONTH) {
                             formatMonthDay(it)
@@ -895,7 +925,7 @@ private fun ChartCard(
                     },
                 )
                 Spacer(Modifier.height(12.dp))
-                CategoryLegend(categoryIds = summary.categories.map { it.categoryId })
+                CategoryLegend(categoryIds = matched.categories.map { it.categoryId })
             }
         }
     }

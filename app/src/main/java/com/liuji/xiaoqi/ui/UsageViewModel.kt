@@ -6,6 +6,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.liuji.xiaoqi.data.AppCategoryAssignment
 import com.liuji.xiaoqi.data.AppUsageItem
+import com.liuji.xiaoqi.data.Categories
 import com.liuji.xiaoqi.data.CategoryUsageItem
 import com.liuji.xiaoqi.data.CategoryWithApps
 import com.liuji.xiaoqi.data.HindsightAppDetail
@@ -15,10 +16,13 @@ import com.liuji.xiaoqi.data.UsageRepository
 import com.liuji.xiaoqi.data.UserCategoryWithCount
 import com.liuji.xiaoqi.data.db.PrivacyAppEntity
 import com.liuji.xiaoqi.data.export.UsageExportWriter
+import com.liuji.xiaoqi.data.frame.FrameFtsProgress
 import com.liuji.xiaoqi.data.frame.FrameInterval
+import com.liuji.xiaoqi.data.frame.FrameSearchCursor
 import com.liuji.xiaoqi.data.frame.FrameSearchHit
 import com.liuji.xiaoqi.data.frame.TimelineItem
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
+import com.liuji.xiaoqi.ui.frame.FrameBrowseCategory
 import com.liuji.xiaoqi.frame.FrameBlacklistItem
 import com.liuji.xiaoqi.frame.FrameBlacklistStore
 import com.liuji.xiaoqi.frame.FrameCaptureAccessibilityService
@@ -54,6 +58,12 @@ enum class FrameSearchScope {
     CURRENT,
     PICKED,
     ALL,
+}
+
+enum class FrameSearchDateMode {
+    ALL,
+    SINGLE,
+    RANGE,
 }
 
 enum class AppScreen {
@@ -180,12 +190,25 @@ data class UsageUiState(
     val frameSearchHits: List<FrameSearchHit> = emptyList(),
     val frameSearchHitIndex: Int = 0,
     val frameSearchLoading: Boolean = false,
+    val frameSearchLoadingMore: Boolean = false,
+    /** null=尚未算出或正在计算 */
+    val frameSearchTotal: Int? = null,
+    val frameSearchHasMore: Boolean = false,
     val frameSearchMessage: String? = null,
+    val frameSearchDateMode: FrameSearchDateMode = FrameSearchDateMode.ALL,
+    val frameSearchSingleEpochDay: Long = 0L,
+    val frameSearchRangeStartEpochDay: Long = 0L,
+    val frameSearchRangeEndEpochDay: Long = 0L,
+    /** true=时间降序（新→旧），false=升序 */
+    val frameSearchSortDescending: Boolean = true,
+    val frameFtsProgress: FrameFtsProgress = FrameFtsProgress(),
     // hindsight app detail
     val hindsightAppDetail: HindsightAppDetail? = null,
     val hindsightAppDetailLoading: Boolean = false,
     val categoriesUi: CategoriesUiState = CategoriesUiState(),
-    val phoneBottomTab: PhoneBottomTab = PhoneBottomTab.DAY,
+    val phoneBottomTab: PhoneBottomTab = PhoneBottomTab.DASHBOARD,
+    val frameBrowseCategories: List<FrameBrowseCategory> = emptyList(),
+    val frameBrowseLoading: Boolean = false,
     val categoryUsageDetail: CategoryUsageDetailState? = null,
     /** 看板 LazyColumn 滚动位置（二级页返回后恢复） */
     val dashboardFirstVisibleIndex: Int = 0,
@@ -229,10 +252,19 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     private var lastLoadedLocalDate: java.time.LocalDate? = null
     private var lastLoadedAt: Long = 0L
     private var frameSearchAnchor: FrameSearchAnchor? = null
+    private var frameSearchJob: Job? = null
+    private var frameSearchCountJob: Job? = null
+    private var frameSearchCursor: FrameSearchCursor? = null
+    private var frameSearchParams: FrameSearchParams? = null
 
     init {
         // refreshPermissionAndData() 内部已调用 loadSettings()，避免启动期双倍 Room IO
         refreshPermissionAndData()
+        viewModelScope.launch {
+            repository.frameFtsProgress().collect { progress ->
+                _state.update { it.copy(frameFtsProgress = progress) }
+            }
+        }
     }
 
     fun refreshPermissionAndData() {
@@ -472,9 +504,20 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 openSettings()
                 true
             }
-            s.screen == AppScreen.FRAME_VIEWER ||
-                s.screen == AppScreen.SETTINGS -> {
-                openDashboard()
+            s.screen == AppScreen.FRAME_VIEWER -> {
+                // 回到底栏内容；保留进入查看器前的 Tab（如画面记录）
+                _state.update {
+                    it.copy(
+                        screen = AppScreen.DASHBOARD,
+                        frames = emptyList(),
+                        frameAppPackage = null,
+                    )
+                }
+                true
+            }
+            s.screen == AppScreen.DASHBOARD &&
+                s.phoneBottomTab == PhoneBottomTab.SETTINGS -> {
+                selectPhoneBottomTab(PhoneBottomTab.DASHBOARD)
                 true
             }
             s.dataSource == DataSource.HINDSIGHT_CLOUD && s.screen == AppScreen.DASHBOARD -> {
@@ -486,8 +529,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun openSettings() {
-        _state.update { it.copy(screen = AppScreen.SETTINGS) }
-        loadSettings()
+        selectPhoneBottomTab(PhoneBottomTab.SETTINGS)
     }
 
     fun openRuntimeLog() {
@@ -495,31 +537,20 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun selectPhoneBottomTab(tab: PhoneBottomTab) {
-        if (tab == PhoneBottomTab.CATEGORIES) {
-            _state.update {
-                it.copy(
-                    phoneBottomTab = tab,
-                    screen = AppScreen.DASHBOARD,
-                    categoryUsageDetail = null,
-                )
-            }
-            loadCategoriesData()
-            return
+        _state.update {
+            it.copy(
+                phoneBottomTab = tab,
+                screen = AppScreen.DASHBOARD,
+                categoryUsageDetail = null,
+                hindsightAppDetail = null,
+                hindsightAppDetailLoading = false,
+            )
         }
-        if (tab == PhoneBottomTab.CLOUD_SYNC) {
-            _state.update {
-                it.copy(
-                    phoneBottomTab = tab,
-                    screen = AppScreen.DASHBOARD,
-                    categoryUsageDetail = null,
-                )
-            }
-            return
-        }
-        val period = tab.toStatsPeriod() ?: return
-        _state.update { it.copy(phoneBottomTab = tab, screen = AppScreen.DASHBOARD) }
-        if (_state.value.period != period) {
-            setPeriod(period)
+        when (tab) {
+            PhoneBottomTab.CATEGORIES -> loadCategoriesData()
+            PhoneBottomTab.FRAMES -> loadFrameBrowseData()
+            PhoneBottomTab.SETTINGS -> loadSettings()
+            PhoneBottomTab.DASHBOARD, PhoneBottomTab.CLOUD_SYNC -> Unit
         }
     }
 
@@ -744,9 +775,16 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 frameSearchHitIndex = 0,
                 frameSearchMessage = null,
                 frameSearchLoading = false,
+                frameSearchLoadingMore = false,
+                frameSearchTotal = null,
+                frameSearchHasMore = false,
             )
         }
         frameSearchAnchor = null
+        frameSearchCursor = null
+        frameSearchParams = null
+        frameSearchJob?.cancel()
+        frameSearchCountJob?.cancel()
     }
 
     fun openHindsightAppDetail(app: AppUsageItem) {
@@ -827,12 +865,14 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
     fun setPeriod(period: StatsPeriod) {
         if (_state.value.period == period) return
         timelineLoadedOffset = null
+        // 立刻清掉旧 summary，避免日/周/月切换瞬间用错图（如周视图先只画「今天」一根柱）
         _state.update {
             it.copy(
                 period = period,
-                phoneBottomTab = PhoneBottomTab.fromPeriod(period),
                 offset = 0,
                 selectedHour = null,
+                summary = null,
+                loading = true,
                 dashboardFirstVisibleIndex = 0,
                 dashboardFirstVisibleOffset = 0,
                 hindsightListFirstVisibleIndex = 0,
@@ -924,6 +964,8 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 offset = next,
                 selectedHour = null,
+                summary = null,
+                loading = true,
                 timeline = emptyList(),
                 timelineDrillStack = emptyList(),
                 timelineLoading = false,
@@ -1300,11 +1342,32 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             openHindsightAppDetail(app)
             return
         }
+        openAppFramesInternal(app.packageName, app.label) {
+            repository.loadFramesForPackage(
+                app.packageName,
+                _state.value.period,
+                _state.value.offset,
+            )
+        }
+    }
+
+    /** 画面记录 Tab：默认近 7 天（含今天） */
+    fun openAppFramesLast7Days(app: AppUsageItem) {
+        openAppFramesInternal(app.packageName, app.label) {
+            repository.loadFramesForPackageLast7Days(app.packageName)
+        }
+    }
+
+    private fun openAppFramesInternal(
+        packageName: String,
+        label: String,
+        loader: suspend () -> List<UiFrameSnapshot>,
+    ) {
         _state.update {
             it.copy(
                 screen = AppScreen.FRAME_VIEWER,
-                frameAppPackage = app.packageName,
-                frameAppLabel = app.label,
+                frameAppPackage = packageName,
+                frameAppLabel = label,
                 frames = emptyList(),
                 frameIndex = 0,
                 framesLoading = true,
@@ -1313,17 +1376,18 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 frameSearchMessage = null,
                 frameSearchQuery = "",
                 frameSearchKeywords = listOf(""),
+                frameSearchLoadingMore = false,
+                frameSearchTotal = null,
+                frameSearchHasMore = false,
             )
         }
+        frameSearchCursor = null
+        frameSearchParams = null
+        frameSearchJob?.cancel()
+        frameSearchCountJob?.cancel()
         viewModelScope.launch {
             runCatching {
-                withContext(Dispatchers.IO) {
-                    repository.loadFramesForPackage(
-                        app.packageName,
-                        _state.value.period,
-                        _state.value.offset,
-                    )
-                }
+                withContext(Dispatchers.IO) { loader() }
             }.onSuccess { frames ->
                 _state.update {
                     it.copy(frames = frames, frameIndex = 0, framesLoading = false)
@@ -1331,6 +1395,64 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
             }.onFailure { e ->
                 _state.update {
                     it.copy(framesLoading = false, error = e.message ?: "加载画面失败")
+                }
+            }
+        }
+    }
+
+    fun loadFrameBrowseData() {
+        if (_state.value.frameBrowseLoading) return
+        viewModelScope.launch {
+            val had = _state.value.frameBrowseCategories.isNotEmpty()
+            if (!had) {
+                _state.update { it.copy(frameBrowseLoading = true) }
+            }
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val framePkgs = repository.distinctFramePackages()
+                        .filter { it.isNotBlank() }
+                    val assignmentByPkg = repository.categories.listInstalledAppsForPicker()
+                        .associateBy { it.packageName }
+                    val items = framePkgs.map { pkg ->
+                        val a = assignmentByPkg[pkg]
+                        val count = repository.countFramesForPackageLast7Days(pkg)
+                        AppUsageItem(
+                            packageName = pkg,
+                            label = a?.label ?: repository.appLabel(pkg),
+                            categoryId = a?.categoryId ?: Categories.Other.id,
+                            millis = count,
+                            categoryName = a?.categoryName ?: Categories.Other.name,
+                            categoryColor = a?.categoryColor ?: Categories.Other.color,
+                        )
+                    }
+                    val catOrder = repository.categories.listCategoriesWithCounts()
+                    catOrder.mapNotNull { cat ->
+                        val apps = items
+                            .filter { it.categoryId == cat.id }
+                            .sortedByDescending { it.millis }
+                        if (apps.isEmpty()) {
+                            null
+                        } else {
+                            FrameBrowseCategory(
+                                categoryId = cat.id,
+                                categoryName = cat.name,
+                                categoryColor = cat.color,
+                                apps = apps,
+                                totalFrameCount = apps.sumOf { it.millis },
+                            )
+                        }
+                    }
+                }
+            }.onSuccess { cats ->
+                _state.update {
+                    it.copy(frameBrowseCategories = cats, frameBrowseLoading = false)
+                }
+            }.onFailure { e ->
+                _state.update {
+                    it.copy(
+                        frameBrowseLoading = false,
+                        error = e.message ?: "加载画面应用失败",
+                    )
                 }
             }
         }
@@ -1396,15 +1518,57 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(frameSearchScope = scope) }
     }
 
+    /** 单应用范围：恰好一包 */
+    fun setFrameSearchSinglePackage(packageName: String) {
+        val pkg = packageName.trim()
+        if (pkg.isEmpty()) return
+        _state.update {
+            it.copy(
+                frameSearchPackages = setOf(pkg),
+                frameSearchScope = FrameSearchScope.CURRENT,
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    /** 多个应用范围 */
     fun setFrameSearchPackages(packages: Set<String>) {
         _state.update {
             it.copy(
                 frameSearchPackages = packages,
                 frameSearchScope = if (packages.isEmpty()) {
-                    FrameSearchScope.CURRENT
+                    FrameSearchScope.ALL
                 } else {
                     FrameSearchScope.PICKED
                 },
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    /** 帧查看器打开搜索：预填当前 App 为「单应用」 */
+    fun openFrameSearchFromViewer() {
+        val pkg = _state.value.frameAppPackage?.trim().orEmpty()
+        _state.update {
+            it.copy(
+                frameSearchScope = if (pkg.isNotEmpty()) {
+                    FrameSearchScope.CURRENT
+                } else {
+                    FrameSearchScope.ALL
+                },
+                frameSearchPackages = if (pkg.isNotEmpty()) setOf(pkg) else emptySet(),
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    /** 画面记录 Tab 打开搜索：默认全部应用 */
+    fun openFrameSearchFromBrowse() {
+        _state.update {
+            it.copy(
+                frameSearchScope = FrameSearchScope.ALL,
+                frameSearchPackages = emptySet(),
+                frameSearchMessage = null,
             )
         }
     }
@@ -1496,6 +1660,76 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(frameSearchStrict = value) }
     }
 
+    fun setFrameSearchDateMode(mode: FrameSearchDateMode) {
+        val today = LocalDate.now().toEpochDay()
+        _state.update { s ->
+            val single = if (s.frameSearchSingleEpochDay > 0L) {
+                s.frameSearchSingleEpochDay
+            } else {
+                today
+            }
+            val rangeStart = if (s.frameSearchRangeStartEpochDay > 0L) {
+                s.frameSearchRangeStartEpochDay
+            } else {
+                today
+            }
+            val rangeEnd = if (s.frameSearchRangeEndEpochDay > 0L) {
+                s.frameSearchRangeEndEpochDay.coerceAtLeast(rangeStart)
+            } else {
+                today
+            }
+            s.copy(
+                frameSearchDateMode = mode,
+                frameSearchSingleEpochDay = single,
+                frameSearchRangeStartEpochDay = rangeStart,
+                frameSearchRangeEndEpochDay = rangeEnd,
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    fun setFrameSearchSingleDay(epochDay: Long) {
+        _state.update {
+            it.copy(
+                frameSearchDateMode = FrameSearchDateMode.SINGLE,
+                frameSearchSingleEpochDay = epochDay,
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    fun setFrameSearchDateRange(startEpochDay: Long, endEpochDay: Long) {
+        val start = minOf(startEpochDay, endEpochDay)
+        val end = maxOf(startEpochDay, endEpochDay)
+        _state.update {
+            it.copy(
+                frameSearchDateMode = FrameSearchDateMode.RANGE,
+                frameSearchRangeStartEpochDay = start,
+                frameSearchRangeEndEpochDay = end,
+                frameSearchMessage = null,
+            )
+        }
+    }
+
+    /** 时间降序 ↔ 升序；若已有关键词则立即重搜 */
+    fun toggleFrameSearchSort() {
+        _state.update { it.copy(frameSearchSortDescending = !it.frameSearchSortDescending) }
+        val s = _state.value
+        val hasTerms = if (s.frameSearchMulti) {
+            s.frameSearchKeywords.any { it.isNotBlank() }
+        } else {
+            s.frameSearchQuery.isNotBlank()
+        }
+        if (hasTerms) runFrameSearch()
+    }
+
+    /** 预览列表近底续页 */
+    fun loadMoreFromSearchPreview() {
+        val hits = _state.value.frameSearchHits
+        if (hits.isEmpty()) return
+        loadMoreFrameSearchHitsIfNeeded(hits.lastIndex, forceNearEnd = true)
+    }
+
     fun runFrameSearch() {
         val multi = _state.value.frameSearchMulti
         val query = _state.value.frameSearchQuery.trim()
@@ -1509,6 +1743,8 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     frameSearchHits = emptyList(),
                     frameSearchHitIndex = 0,
+                    frameSearchTotal = null,
+                    frameSearchHasMore = false,
                     frameSearchMessage = "请输入搜索关键词",
                 )
             }
@@ -1517,9 +1753,10 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         if (_state.value.frameSearchLoading) return
         val scopePackages = when (_state.value.frameSearchScope) {
             FrameSearchScope.CURRENT -> {
-                val pkg = _state.value.frameAppPackage
-                if (pkg.isNullOrBlank()) {
-                    _state.update { it.copy(frameSearchMessage = "当前无应用上下文") }
+                val pkg = _state.value.frameSearchPackages.firstOrNull()?.trim().orEmpty()
+                    .ifEmpty { _state.value.frameAppPackage?.trim().orEmpty() }
+                if (pkg.isEmpty()) {
+                    _state.update { it.copy(frameSearchMessage = "请先选择应用") }
                     return
                 }
                 setOf(pkg)
@@ -1536,41 +1773,146 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         }
         val strict = _state.value.frameSearchStrict
         val matchAll = multi && _state.value.frameSearchMatchAll
+        val (startMillis, endMillis) = frameSearchDateRangeMillis(_state.value)
+        val params = FrameSearchParams(
+            query = query,
+            scopePackages = scopePackages,
+            strict = strict,
+            terms = terms,
+            matchAll = matchAll,
+            allowFrameId = !multi,
+            startMillis = startMillis,
+            endMillisExclusive = endMillis,
+            sortDescending = _state.value.frameSearchSortDescending,
+        )
+        frameSearchParams = params
+        frameSearchCursor = null
+        frameSearchJob?.cancel()
+        frameSearchCountJob?.cancel()
+        val indexMsg = _state.value.frameFtsProgress.message
         _state.update {
-            it.copy(frameSearchLoading = true, frameSearchMessage = null)
+            it.copy(
+                frameSearchLoading = true,
+                frameSearchLoadingMore = false,
+                frameSearchHits = emptyList(),
+                frameSearchHitIndex = 0,
+                frameSearchTotal = null,
+                frameSearchHasMore = false,
+                frameSearchMessage = indexMsg,
+            )
         }
-        viewModelScope.launch {
+        frameSearchJob = viewModelScope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
-                    repository.searchFrames(
-                        query = query,
-                        scopePackages = scopePackages,
-                        strict = strict,
-                        terms = terms,
-                        matchAll = matchAll,
-                        allowFrameId = !multi,
+                    repository.searchFramesPage(
+                        query = params.query,
+                        scopePackages = params.scopePackages,
+                        strict = params.strict,
+                        terms = params.terms,
+                        matchAll = params.matchAll,
+                        allowFrameId = params.allowFrameId,
+                        cursor = null,
+                        limit = UsageRepository.FRAME_SEARCH_PAGE_SIZE,
+                        startMillis = params.startMillis,
+                        endMillisExclusive = params.endMillisExclusive,
+                        descending = params.sortDescending,
                     )
                 }
-            }.onSuccess { hits ->
+            }.onSuccess { page ->
+                frameSearchCursor = page.nextCursor
                 _state.update {
                     it.copy(
-                        frameSearchHits = hits,
+                        frameSearchHits = page.hits,
                         frameSearchHitIndex = 0,
                         frameSearchLoading = false,
-                        frameSearchMessage = if (hits.isEmpty()) "无匹配结果" else null,
+                        frameSearchHasMore = page.nextCursor != null,
+                        frameSearchMessage = when {
+                            page.hits.isEmpty() -> "无匹配结果"
+                            else -> it.frameFtsProgress.message
+                        },
                     )
                 }
-                if (hits.isNotEmpty()) {
+                if (page.hits.isNotEmpty()) {
                     jumpToFrameSearchHit(0)
+                    startFrameSearchCount(params)
                 }
             }.onFailure { e ->
                 _state.update {
                     it.copy(
                         frameSearchLoading = false,
                         frameSearchHits = emptyList(),
+                        frameSearchHasMore = false,
                         frameSearchMessage = e.message ?: "搜索失败",
                     )
                 }
+            }
+        }
+    }
+
+    private fun startFrameSearchCount(params: FrameSearchParams) {
+        frameSearchCountJob?.cancel()
+        frameSearchCountJob = viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.countFrameHits(
+                        query = params.query,
+                        scopePackages = params.scopePackages,
+                        strict = params.strict,
+                        terms = params.terms,
+                        matchAll = params.matchAll,
+                        allowFrameId = params.allowFrameId,
+                        startMillis = params.startMillis,
+                        endMillisExclusive = params.endMillisExclusive,
+                    )
+                }
+            }.onSuccess { total ->
+                _state.update { it.copy(frameSearchTotal = total) }
+            }.onFailure { e ->
+                AppLog.w("FrameSearch", "计数失败: ${e.message}", e)
+            }
+        }
+    }
+
+    private fun loadMoreFrameSearchHitsIfNeeded(
+        targetIndex: Int,
+        forceNearEnd: Boolean = false,
+    ) {
+        val state = _state.value
+        if (!state.frameSearchHasMore || state.frameSearchLoadingMore) return
+        val params = frameSearchParams ?: return
+        val cursor = frameSearchCursor ?: return
+        // 接近已加载末尾时续页；预览滚动可强制以 lastIndex 触发
+        if (!forceNearEnd && targetIndex < state.frameSearchHits.lastIndex - 4) return
+        _state.update { it.copy(frameSearchLoadingMore = true) }
+        frameSearchJob = viewModelScope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    repository.searchFramesPage(
+                        query = params.query,
+                        scopePackages = params.scopePackages,
+                        strict = params.strict,
+                        terms = params.terms,
+                        matchAll = params.matchAll,
+                        allowFrameId = false,
+                        cursor = cursor,
+                        limit = UsageRepository.FRAME_SEARCH_PAGE_SIZE,
+                        startMillis = params.startMillis,
+                        endMillisExclusive = params.endMillisExclusive,
+                        descending = params.sortDescending,
+                    )
+                }
+            }.onSuccess { page ->
+                frameSearchCursor = page.nextCursor
+                _state.update {
+                    it.copy(
+                        frameSearchHits = it.frameSearchHits + page.hits,
+                        frameSearchLoadingMore = false,
+                        frameSearchHasMore = page.nextCursor != null,
+                    )
+                }
+            }.onFailure { e ->
+                AppLog.w("FrameSearch", "续页失败: ${e.message}", e)
+                _state.update { it.copy(frameSearchLoadingMore = false) }
             }
         }
     }
@@ -1587,12 +1929,14 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         if (hits.isEmpty()) return
         val next = (_state.value.frameSearchHitIndex + 1).coerceAtMost(hits.lastIndex)
         jumpToFrameSearchHit(next)
+        loadMoreFrameSearchHitsIfNeeded(next)
     }
 
     fun jumpToFrameSearchHit(index: Int) {
         val hits = _state.value.frameSearchHits
         if (hits.isEmpty()) return
         val i = index.coerceIn(0, hits.lastIndex)
+        loadMoreFrameSearchHitsIfNeeded(i)
         val hit = hits[i]
         if (frameSearchAnchor == null) {
             val current = _state.value
@@ -1608,6 +1952,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         val alreadyLoaded = currentPkg == hit.packageName &&
             _state.value.frames.any { it.id == hit.frameId }
         if (alreadyLoaded) {
+            _state.update { it.copy(screen = AppScreen.FRAME_VIEWER) }
             val idx = _state.value.frames.indexOfFirst { it.id == hit.frameId }
             if (idx >= 0) setFrameIndex(idx)
             return
@@ -1615,6 +1960,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         // 同包但当前列表是「统计窗口」子集，或跨包：加载该包全时段帧
         _state.update {
             it.copy(
+                screen = AppScreen.FRAME_VIEWER,
                 framesLoading = true,
                 frameAppPackage = hit.packageName,
                 frameAppLabel = hit.appLabel.ifBlank { hit.packageName },
@@ -1758,15 +2104,14 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
         if (source == DataSource.PHONE && !_state.value.hasPermission) return
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
-            val hadData = _state.value.summary != null
+            val period = _state.value.period
+            val offset = _state.value.offset
             _state.update {
                 it.copy(
-                    loading = if (hadData) it.loading else true,
+                    loading = true,
                     error = null,
                 )
             }
-            val period = _state.value.period
-            val offset = _state.value.offset
             runCatching {
                 withContext(Dispatchers.IO) {
                     when (source) {
@@ -1775,6 +2120,8 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                     }
                 }
             }.onSuccess { summary ->
+                // 快速连点切换时，丢弃过期请求结果
+                if (_state.value.period != period || _state.value.offset != offset) return@onSuccess
                 markLoaded()
                 _state.update { it.copy(loading = false, summary = summary, error = null) }
                 if (source == DataSource.HINDSIGHT_CLOUD) {
@@ -1785,6 +2132,7 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                         HindsightDatabase.getInstance(getApplication()).dao().devices()
                     }
                     val label = devices.firstOrNull()?.displayName ?: "Windows"
+                    if (_state.value.period != period || _state.value.offset != offset) return@onSuccess
                     _state.update {
                         it.copy(
                             hindsightDeviceLabel = label,
@@ -1798,11 +2146,16 @@ class UsageViewModel(application: Application) : AndroidViewModel(application) {
                             repository.loadAppIcon(app.packageName)
                         }
                     }
-                    if (period == StatsPeriod.DAY) {
+                    if (period == StatsPeriod.DAY &&
+                        _state.value.period == period &&
+                        _state.value.offset == offset
+                    ) {
                         loadTimeline(sync = false)
                     }
                 }
             }.onFailure { e ->
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                if (_state.value.period != period || _state.value.offset != offset) return@onFailure
                 _state.update {
                     it.copy(loading = false, error = e.message ?: "加载失败")
                 }
@@ -1821,3 +2174,46 @@ private data class FrameSearchAnchor(
     val frames: List<UiFrameSnapshot>,
     val index: Int,
 )
+
+private data class FrameSearchParams(
+    val query: String,
+    val scopePackages: Set<String>?,
+    val strict: Boolean,
+    val terms: List<String>,
+    val matchAll: Boolean,
+    val allowFrameId: Boolean,
+    val startMillis: Long? = null,
+    val endMillisExclusive: Long? = null,
+    val sortDescending: Boolean = true,
+)
+
+/** 按日期限制模式换算整天区间：[start 00:00, endExclusive)。 */
+private fun frameSearchDateRangeMillis(state: UsageUiState): Pair<Long?, Long?> {
+    val zone = ZoneId.systemDefault()
+    return when (state.frameSearchDateMode) {
+        FrameSearchDateMode.ALL -> null to null
+        FrameSearchDateMode.SINGLE -> {
+            val day = state.frameSearchSingleEpochDay.takeIf { it > 0L }
+                ?: LocalDate.now().toEpochDay()
+            val start = LocalDate.ofEpochDay(day).atStartOfDay(zone).toInstant().toEpochMilli()
+            val end = LocalDate.ofEpochDay(day).plusDays(1).atStartOfDay(zone)
+                .toInstant().toEpochMilli()
+            start to end
+        }
+        FrameSearchDateMode.RANGE -> {
+            val today = LocalDate.now().toEpochDay()
+            var startDay = state.frameSearchRangeStartEpochDay.takeIf { it > 0L } ?: today
+            var endDay = state.frameSearchRangeEndEpochDay.takeIf { it > 0L } ?: today
+            if (endDay < startDay) {
+                val t = startDay
+                startDay = endDay
+                endDay = t
+            }
+            val start = LocalDate.ofEpochDay(startDay).atStartOfDay(zone)
+                .toInstant().toEpochMilli()
+            val end = LocalDate.ofEpochDay(endDay).plusDays(1).atStartOfDay(zone)
+                .toInstant().toEpochMilli()
+            start to end
+        }
+    }
+}

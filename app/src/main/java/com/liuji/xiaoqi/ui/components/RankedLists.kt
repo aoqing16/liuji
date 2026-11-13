@@ -114,6 +114,7 @@ fun AppUsageGrid(
     modifier: Modifier = Modifier,
     defaultLimit: Int = 50,
     onAppClick: ((AppUsageItem) -> Unit)? = null,
+    valueText: (AppUsageItem) -> String = { formatDurationCompact(it.millis) },
 ) {
     var expanded by remember(apps) { mutableStateOf(false) }
     val canExpand = apps.size > defaultLimit
@@ -139,6 +140,7 @@ fun AppUsageGrid(
                 AppUsageGridCell(
                     app = app,
                     icon = iconLoader(app.packageName),
+                    value = valueText(app),
                     onClick = onAppClick?.let { handler -> { handler(app) } },
                     modifier = Modifier.weight(1f),
                 )
@@ -169,6 +171,7 @@ fun AppUsageGrid(
 private fun AppUsageGridCell(
     app: AppUsageItem,
     icon: Drawable?,
+    value: String,
     onClick: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
@@ -204,7 +207,7 @@ private fun AppUsageGridCell(
         )
         Spacer(Modifier.height(2.dp))
         Text(
-            text = formatDurationCompact(app.millis),
+            text = value,
             color = TextMuted,
             fontSize = 10.sp,
             lineHeight = 12.sp,

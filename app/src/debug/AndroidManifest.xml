@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver
+            android:name=".debug.FrameSearchBenchmarkReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.liuji.xiaoqi.BENCH_SEARCH" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".debug.FrameSearchBenchmarkService"
+            android:exported="true"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="debug_frame_search_benchmark" />
+        </service>
+    </application>
+</manifest>

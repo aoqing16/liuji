@@ -6,9 +6,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Category
 import androidx.compose.material.icons.outlined.Chat
-import androidx.compose.material.icons.outlined.DateRange
-import androidx.compose.material.icons.outlined.Schedule
-import androidx.compose.material.icons.outlined.Today
+import androidx.compose.material.icons.outlined.Dashboard
+import androidx.compose.material.icons.outlined.PhotoLibrary
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -16,7 +16,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import com.liuji.xiaoqi.data.StatsPeriod
 import com.liuji.xiaoqi.ui.theme.CardBackground
 
 @Composable
@@ -30,34 +29,34 @@ fun PhoneHomeScaffold(
         bottomBar = {
             NavigationBar(containerColor = CardBackground) {
                 NavigationBarItem(
-                    selected = bottomTab == PhoneBottomTab.DAY,
-                    onClick = { onBottomTab(PhoneBottomTab.DAY) },
-                    icon = { Icon(Icons.Outlined.Today, contentDescription = null) },
-                    label = { Text("日") },
+                    selected = bottomTab == PhoneBottomTab.DASHBOARD,
+                    onClick = { onBottomTab(PhoneBottomTab.DASHBOARD) },
+                    icon = { Icon(Icons.Outlined.Dashboard, contentDescription = null) },
+                    label = { Text("看板") },
                 )
                 NavigationBarItem(
-                    selected = bottomTab == PhoneBottomTab.WEEK,
-                    onClick = { onBottomTab(PhoneBottomTab.WEEK) },
-                    icon = { Icon(Icons.Outlined.DateRange, contentDescription = null) },
-                    label = { Text("周") },
-                )
-                NavigationBarItem(
-                    selected = bottomTab == PhoneBottomTab.MONTH,
-                    onClick = { onBottomTab(PhoneBottomTab.MONTH) },
-                    icon = { Icon(Icons.Outlined.Schedule, contentDescription = null) },
-                    label = { Text("月") },
+                    selected = bottomTab == PhoneBottomTab.FRAMES,
+                    onClick = { onBottomTab(PhoneBottomTab.FRAMES) },
+                    icon = { Icon(Icons.Outlined.PhotoLibrary, contentDescription = null) },
+                    label = { Text("画面记录") },
                 )
                 NavigationBarItem(
                     selected = bottomTab == PhoneBottomTab.CATEGORIES,
                     onClick = { onBottomTab(PhoneBottomTab.CATEGORIES) },
                     icon = { Icon(Icons.Outlined.Category, contentDescription = null) },
-                    label = { Text("分类") },
+                    label = { Text("分类管理") },
                 )
                 NavigationBarItem(
                     selected = bottomTab == PhoneBottomTab.CLOUD_SYNC,
                     onClick = { onBottomTab(PhoneBottomTab.CLOUD_SYNC) },
                     icon = { Icon(Icons.Outlined.Chat, contentDescription = null) },
                     label = { Text("AI对话") },
+                )
+                NavigationBarItem(
+                    selected = bottomTab == PhoneBottomTab.SETTINGS,
+                    onClick = { onBottomTab(PhoneBottomTab.SETTINGS) },
+                    icon = { Icon(Icons.Outlined.Settings, contentDescription = null) },
+                    label = { Text("设置") },
                 )
             }
         },
@@ -69,25 +68,9 @@ fun PhoneHomeScaffold(
 }
 
 enum class PhoneBottomTab {
-    DAY,
-    WEEK,
-    MONTH,
+    DASHBOARD,
+    FRAMES,
     CATEGORIES,
     CLOUD_SYNC,
-    ;
-
-    fun toStatsPeriod(): StatsPeriod? = when (this) {
-        DAY -> StatsPeriod.DAY
-        WEEK -> StatsPeriod.WEEK
-        MONTH -> StatsPeriod.MONTH
-        CATEGORIES, CLOUD_SYNC -> null
-    }
-
-    companion object {
-        fun fromPeriod(period: StatsPeriod): PhoneBottomTab = when (period) {
-            StatsPeriod.DAY -> DAY
-            StatsPeriod.WEEK -> WEEK
-            StatsPeriod.MONTH -> MONTH
-        }
-    }
+    SETTINGS,
 }

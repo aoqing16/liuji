@@ -109,11 +109,13 @@ class CloudSyncViewModel(app: Application) : AndroidViewModel(app) {
             val result = withContext(Dispatchers.IO) {
                 val client = ImaApiClient(s.clientId.trim(), s.apiKey)
                 val (res, id) = client.ensureKnowledgeBase(s.knowledgeBaseName.trim())
-                if (res.ok && !id.isNullOrBlank()) {
-                    prefs.setKnowledgeBaseId(id)
-                    "连接成功，知识库已就绪"
-                } else {
-                    res.error ?: res.errmsg ?: "连接失败"
+                when {
+                    res.ok && !id.isNullOrBlank() && ImaApiClient.isValidKnowledgeBaseId(id) -> {
+                        prefs.setKnowledgeBaseId(id)
+                        "连接成功，知识库已就绪"
+                    }
+                    res.ok && !id.isNullOrBlank() -> "知识库 ID 格式异常：$id"
+                    else -> res.error ?: res.errmsg ?: "连接失败"
                 }
             }
             _state.update {

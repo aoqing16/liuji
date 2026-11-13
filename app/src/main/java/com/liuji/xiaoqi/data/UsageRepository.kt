@@ -23,9 +23,13 @@ import com.liuji.xiaoqi.data.db.SyncStateEntity
 import com.liuji.xiaoqi.data.db.UsageDatabase
 import com.liuji.xiaoqi.data.db.UsageSessionEntity
 import com.liuji.xiaoqi.data.db.UiFrameEntity
+import com.liuji.xiaoqi.data.frame.FrameFtsIndexer
+import com.liuji.xiaoqi.data.frame.FrameFtsQuery
 import com.liuji.xiaoqi.data.frame.FrameInterval
 import com.liuji.xiaoqi.data.frame.FrameJson
+import com.liuji.xiaoqi.data.frame.FrameSearchCursor
 import com.liuji.xiaoqi.data.frame.FrameSearchHit
+import com.liuji.xiaoqi.data.frame.FrameSearchPage
 import com.liuji.xiaoqi.data.frame.TimelineItem
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
 import java.time.DayOfWeek
@@ -186,7 +190,8 @@ class UsageRepository(private val context: Context) {
                 categoryId = categoryResolver.resolve(session.packageName),
             )
         }
-        dao.replaceSessionsInRange(rewriteStart, untilMillis, entities)
+        // 按包合并：系统未返回的包（如被隐藏抹掉的抖音）保留本地会话
+        dao.mergeSessionsInRange(rewriteStart, untilMillis, entities)
 
         val now = System.currentTimeMillis()
         val metas = collected.sessions
@@ -719,6 +724,26 @@ class UsageRepository(private val context: Context) {
     ): List<UiFrameSnapshot> =
         dao.getFramesForPackage(packageName, startMillis, endMillisExclusive).map { it.toSnapshot() }
 
+    /** 含今天在内共 7 个本地日：[今天-6, 明天0点) */
+    fun last7DaysRangeMillis(): Pair<Long, Long> {
+        val today = LocalDate.now(zoneId)
+        val start = today.minusDays(6).atStartOfDay(zoneId).toInstant().toEpochMilli()
+        val end = today.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli()
+        return start to end
+    }
+
+    suspend fun loadFramesForPackageLast7Days(packageName: String): List<UiFrameSnapshot> {
+        val (start, end) = last7DaysRangeMillis()
+        return loadFramesForPackageBetween(packageName, start, end)
+    }
+
+    suspend fun countFramesForPackageLast7Days(packageName: String): Long {
+        val (start, end) = last7DaysRangeMillis()
+        return dao.countFramesForPackageInRange(packageName, start, end)
+    }
+
+    suspend fun distinctFramePackages(): List<String> = dao.distinctFramePackages()
+
     /** 与 [loadSummary] 同一时间窗的全部帧（小窗可用；周/月导出请用 [loadExportFrameTexts]） */
     suspend fun loadFramesForPeriod(period: StatsPeriod, offset: Int): List<UiFrameSnapshot> {
         val today = LocalDate.now(zoneId)
@@ -840,13 +865,233 @@ class UsageRepository(private val context: Context) {
     suspend fun loadFramesForPackageAllTime(packageName: String): List<UiFrameSnapshot> =
         dao.getFramesForPackageAllTime(packageName).map { it.toSnapshot() }
 
+    fun frameFtsProgress() = FrameFtsIndexer.get(context).progress
+
+    fun isFrameFtsReady(): Boolean = FrameFtsIndexer.get(context).isReady()
+
     /**
-     * @param scopePackages null 为全局；非空则只搜这些包
-     * @param strict true=区分大小写 contains；false=不区分大小写 contains
-     * @param terms 多条关键词；空则退回 [query]
-     * @param matchAll true=每个关键词都要出现在该帧；false=任一即可
-     * @param allowFrameId 仅单关键词模式解析记录编号
+     * FTS 分页搜索。索引未就绪时退回 [searchFramesLegacy] 再切片。
      */
+    suspend fun searchFramesPage(
+        query: String,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        terms: List<String> = emptyList(),
+        matchAll: Boolean = false,
+        allowFrameId: Boolean = true,
+        cursor: FrameSearchCursor? = null,
+        limit: Int = FRAME_SEARCH_PAGE_SIZE,
+        startMillis: Long? = null,
+        endMillisExclusive: Long? = null,
+        descending: Boolean = true,
+    ): FrameSearchPage {
+        val activeTerms = normalizeTerms(query, terms)
+        if (activeTerms.isEmpty()) return FrameSearchPage(emptyList(), null)
+        if (scopePackages != null && scopePackages.isEmpty()) {
+            return FrameSearchPage(emptyList(), null)
+        }
+        if (allowFrameId && activeTerms.size == 1 && cursor == null) {
+            parseFrameIdQuery(activeTerms.first())?.let { frameId ->
+                val row = dao.getFrameById(frameId) ?: return FrameSearchPage(emptyList(), null)
+                if (scopePackages != null && row.packageName !in scopePackages) {
+                    return FrameSearchPage(emptyList(), null)
+                }
+                if (!inCapturedRange(row.capturedAt, startMillis, endMillisExclusive)) {
+                    return FrameSearchPage(emptyList(), null)
+                }
+                return FrameSearchPage(
+                    hits = listOf(
+                        FrameSearchHit(
+                            frameId = row.id,
+                            packageName = row.packageName,
+                            appLabel = resolveLabel(row.packageName),
+                            capturedAt = row.capturedAt,
+                            snippet = "frame_id=$frameId",
+                        ),
+                    ),
+                    nextCursor = null,
+                )
+            }
+        }
+
+        val indexer = FrameFtsIndexer.get(context)
+        if (!indexer.isReady()) {
+            return legacyPage(
+                activeTerms, scopePackages, strict, matchAll, cursor, limit,
+                startMillis, endMillisExclusive, descending,
+            )
+        }
+
+        return runCatching {
+            val sql = FrameFtsQuery.pageQuery(
+                terms = activeTerms,
+                matchAll = matchAll,
+                strict = strict,
+                scopePackages = scopePackages,
+                cursor = cursor,
+                limit = limit,
+                startMillis = startMillis,
+                endMillisExclusive = endMillisExclusive,
+                descending = descending,
+            )
+            val rows = dao.searchFramesRaw(sql)
+            val hits = rows.map { row ->
+                FrameSearchHit(
+                    frameId = row.id,
+                    packageName = row.packageName,
+                    appLabel = resolveLabel(row.packageName),
+                    capturedAt = row.capturedAt,
+                    snippet = matchSnippet(row.textsJson, activeTerms, strict, matchAll)
+                        ?: row.textsJson.take(80),
+                )
+            }
+            val next = if (hits.size >= limit) {
+                val last = hits.last()
+                FrameSearchCursor(last.capturedAt, last.frameId)
+            } else {
+                null
+            }
+            FrameSearchPage(hits, next)
+        }.getOrElse { e ->
+            AppLog.w(TAG, "FTS 分页失败，退回旧路径: ${e.message}", e)
+            legacyPage(
+                activeTerms, scopePackages, strict, matchAll, cursor, limit,
+                startMillis, endMillisExclusive, descending,
+            )
+        }
+    }
+
+    suspend fun countFrameHits(
+        query: String,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        terms: List<String> = emptyList(),
+        matchAll: Boolean = false,
+        allowFrameId: Boolean = true,
+        startMillis: Long? = null,
+        endMillisExclusive: Long? = null,
+    ): Int {
+        val activeTerms = normalizeTerms(query, terms)
+        if (activeTerms.isEmpty()) return 0
+        if (scopePackages != null && scopePackages.isEmpty()) return 0
+        if (allowFrameId && activeTerms.size == 1) {
+            parseFrameIdQuery(activeTerms.first())?.let { frameId ->
+                val row = dao.getFrameById(frameId) ?: return 0
+                if (scopePackages != null && row.packageName !in scopePackages) return 0
+                if (!inCapturedRange(row.capturedAt, startMillis, endMillisExclusive)) return 0
+                return 1
+            }
+        }
+        val indexer = FrameFtsIndexer.get(context)
+        if (!indexer.isReady()) {
+            return countLegacyHits(
+                activeTerms, scopePackages, strict, matchAll,
+                startMillis, endMillisExclusive,
+            )
+        }
+        return runCatching {
+            dao.countFramesRaw(
+                FrameFtsQuery.countQuery(
+                    terms = activeTerms,
+                    matchAll = matchAll,
+                    strict = strict,
+                    scopePackages = scopePackages,
+                    startMillis = startMillis,
+                    endMillisExclusive = endMillisExclusive,
+                ),
+            ).toInt()
+        }.getOrElse { e ->
+            AppLog.w(TAG, "FTS 计数失败: ${e.message}", e)
+            countLegacyHits(
+                activeTerms, scopePackages, strict, matchAll,
+                startMillis, endMillisExclusive,
+            )
+        }
+    }
+
+    private suspend fun countLegacyHits(
+        activeTerms: List<String>,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        matchAll: Boolean,
+        startMillis: Long?,
+        endMillisExclusive: Long?,
+    ): Int {
+        var count = 0
+        var beforeAt = Long.MAX_VALUE
+        var beforeId = Long.MAX_VALUE
+        var guard = 0
+        while (guard++ < 100_000) {
+            val batch = loadLegacyBatch(
+                scopePackages, beforeAt, beforeId, LEGACY_SCAN_BATCH, descending = true,
+            )
+            if (batch.isEmpty()) break
+            for (row in batch) {
+                if (!inCapturedRange(row.capturedAt, startMillis, endMillisExclusive)) {
+                    if (startMillis != null && row.capturedAt < startMillis) {
+                        return count
+                    }
+                    continue
+                }
+                if (matchSnippet(row.textsJson, activeTerms, strict, matchAll) != null) {
+                    count++
+                }
+            }
+            val last = batch.last()
+            beforeAt = last.capturedAt
+            beforeId = last.id
+            if (batch.size < LEGACY_SCAN_BATCH) break
+            if (startMillis != null && last.capturedAt < startMillis) break
+        }
+        return count
+    }
+
+    /**
+     * 旧路径：分批投影扫描 + contains。不再一次性装入全部帧，避免 OOM。
+     * @param maxHits 最多收集多少命中；null 表示不截断（仍按批扫描）。
+     */
+    suspend fun searchFramesLegacy(
+        query: String,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        terms: List<String> = emptyList(),
+        matchAll: Boolean = false,
+        allowFrameId: Boolean = true,
+        maxHits: Int? = null,
+    ): List<FrameSearchHit> {
+        val activeTerms = normalizeTerms(query, terms)
+        if (activeTerms.isEmpty()) return emptyList()
+        if (scopePackages != null && scopePackages.isEmpty()) return emptyList()
+        if (allowFrameId && activeTerms.size == 1) {
+            parseFrameIdQuery(activeTerms.first())?.let { frameId ->
+                val row = dao.getFrameById(frameId) ?: return emptyList()
+                if (scopePackages != null && row.packageName !in scopePackages) {
+                    return emptyList()
+                }
+                return listOf(
+                    FrameSearchHit(
+                        frameId = row.id,
+                        packageName = row.packageName,
+                        appLabel = resolveLabel(row.packageName),
+                        capturedAt = row.capturedAt,
+                        snippet = "frame_id=$frameId",
+                    ),
+                )
+            }
+        }
+        val page = scanLegacyHits(
+            activeTerms = activeTerms,
+            scopePackages = scopePackages,
+            strict = strict,
+            matchAll = matchAll,
+            cursor = null,
+            limit = maxHits ?: Int.MAX_VALUE,
+            stopAfterLimit = maxHits != null,
+        )
+        return page.hits
+    }
+
+    /** 兼容旧调用名，转发到旧路径。 */
     suspend fun searchFrames(
         query: String,
         scopePackages: Set<String>?,
@@ -854,51 +1099,162 @@ class UsageRepository(private val context: Context) {
         terms: List<String> = emptyList(),
         matchAll: Boolean = false,
         allowFrameId: Boolean = true,
-    ): List<FrameSearchHit> {
-        val activeTerms = terms.map { it.trim() }.filter { it.isNotEmpty() }
+    ): List<FrameSearchHit> = searchFramesLegacy(
+        query, scopePackages, strict, terms, matchAll, allowFrameId,
+    )
+
+    private fun normalizeTerms(query: String, terms: List<String>): List<String> =
+        terms.map { it.trim() }.filter { it.isNotEmpty() }
             .ifEmpty { listOfNotNull(query.trim().takeIf { it.isNotEmpty() }) }
-        if (activeTerms.isEmpty()) return emptyList()
-        if (scopePackages != null && scopePackages.isEmpty()) return emptyList()
-        if (allowFrameId && activeTerms.size == 1) {
-            parseFrameIdQuery(activeTerms.first())?.let { frameId ->
-            val row = dao.getFrameById(frameId) ?: return emptyList()
-            if (scopePackages != null && row.packageName !in scopePackages) {
-                return emptyList()
-            }
-            return listOf(
-                FrameSearchHit(
+
+    private suspend fun legacyPage(
+        activeTerms: List<String>,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        matchAll: Boolean,
+        cursor: FrameSearchCursor?,
+        limit: Int,
+        startMillis: Long?,
+        endMillisExclusive: Long?,
+        descending: Boolean,
+    ): FrameSearchPage = scanLegacyHits(
+        activeTerms = activeTerms,
+        scopePackages = scopePackages,
+        strict = strict,
+        matchAll = matchAll,
+        cursor = cursor,
+        limit = limit,
+        stopAfterLimit = true,
+        startMillis = startMillis,
+        endMillisExclusive = endMillisExclusive,
+        descending = descending,
+    )
+
+    /**
+     * 按 (captured_at, id) 分批扫描投影行，边扫边匹配。
+     * [stopAfterLimit]=true 时凑满 [limit] 条命中即停（用于分页）。
+     */
+    private suspend fun scanLegacyHits(
+        activeTerms: List<String>,
+        scopePackages: Set<String>?,
+        strict: Boolean,
+        matchAll: Boolean,
+        cursor: FrameSearchCursor?,
+        limit: Int,
+        stopAfterLimit: Boolean,
+        startMillis: Long? = null,
+        endMillisExclusive: Long? = null,
+        descending: Boolean = true,
+    ): FrameSearchPage {
+        val hits = ArrayList<FrameSearchHit>(min(limit, 256).coerceAtLeast(16))
+        var cursorAt = cursor?.capturedAt ?: if (descending) Long.MAX_VALUE else Long.MIN_VALUE
+        var cursorId = cursor?.id ?: if (descending) Long.MAX_VALUE else Long.MIN_VALUE
+        var guard = 0
+        while (hits.size < limit && guard++ < 100_000) {
+            val batch = loadLegacyBatch(
+                scopePackages, cursorAt, cursorId, LEGACY_SCAN_BATCH, descending,
+            )
+            if (batch.isEmpty()) break
+            for (row in batch) {
+                if (!inCapturedRange(row.capturedAt, startMillis, endMillisExclusive)) {
+                    if (descending && startMillis != null && row.capturedAt < startMillis) {
+                        return FrameSearchPage(hits, null)
+                    }
+                    if (!descending && endMillisExclusive != null &&
+                        row.capturedAt >= endMillisExclusive
+                    ) {
+                        return FrameSearchPage(hits, null)
+                    }
+                    continue
+                }
+                val snippet = matchSnippet(row.textsJson, activeTerms, strict, matchAll)
+                    ?: continue
+                hits += FrameSearchHit(
                     frameId = row.id,
                     packageName = row.packageName,
                     appLabel = resolveLabel(row.packageName),
                     capturedAt = row.capturedAt,
-                    snippet = "frame_id=$frameId",
-                ),
-            )
+                    snippet = snippet,
+                )
+                if (stopAfterLimit && hits.size >= limit) break
+            }
+            val last = batch.last()
+            cursorAt = last.capturedAt
+            cursorId = last.id
+            if (batch.size < LEGACY_SCAN_BATCH) break
+            if (descending && startMillis != null && last.capturedAt < startMillis) break
+            if (!descending && endMillisExclusive != null &&
+                last.capturedAt >= endMillisExclusive
+            ) {
+                break
             }
         }
-        val rows = when {
-            scopePackages == null -> dao.getAllFramesOrdered()
-            scopePackages.size == 1 -> dao.getFramesForPackageAllTime(scopePackages.first())
-            else -> {
-                val merged = ArrayList<com.liuji.xiaoqi.data.db.UiFrameEntity>()
-                for (chunk in scopePackages.toList().chunked(200)) {
-                    merged += dao.getFramesForPackages(chunk)
-                }
-                merged.sortedBy { it.capturedAt }
-            }
+        val next = if (stopAfterLimit && hits.size >= limit) {
+            val last = hits.last()
+            FrameSearchCursor(last.capturedAt, last.frameId)
+        } else {
+            null
         }
-        val hits = ArrayList<FrameSearchHit>()
-        for (e in rows) {
-            val snippet = matchSnippet(e.textsJson, activeTerms, strict, matchAll) ?: continue
-            hits += FrameSearchHit(
-                frameId = e.id,
-                packageName = e.packageName,
-                appLabel = resolveLabel(e.packageName),
-                capturedAt = e.capturedAt,
-                snippet = snippet,
+        return FrameSearchPage(hits, next)
+    }
+
+    private fun inCapturedRange(
+        capturedAt: Long,
+        startMillis: Long?,
+        endMillisExclusive: Long?,
+    ): Boolean {
+        if (startMillis != null && capturedAt < startMillis) return false
+        if (endMillisExclusive != null && capturedAt >= endMillisExclusive) return false
+        return true
+    }
+
+    private suspend fun loadLegacyBatch(
+        scopePackages: Set<String>?,
+        at: Long,
+        id: Long,
+        limit: Int,
+        descending: Boolean,
+    ): List<com.liuji.xiaoqi.data.db.FrameSearchPageRow> = when {
+        descending && scopePackages == null ->
+            dao.getFrameSearchProjectionBefore(at, id, limit)
+        descending && scopePackages!!.size == 1 ->
+            dao.getFrameSearchProjectionForPackageBefore(
+                scopePackages.first(), at, id, limit,
             )
+        descending -> {
+            val merged = ArrayList<com.liuji.xiaoqi.data.db.FrameSearchPageRow>()
+            for (chunk in scopePackages!!.toList().chunked(200)) {
+                merged += dao.getFrameSearchProjectionForPackagesBefore(
+                    chunk, at, id, limit,
+                )
+            }
+            merged
+                .sortedWith(
+                    compareByDescending<com.liuji.xiaoqi.data.db.FrameSearchPageRow> { it.capturedAt }
+                        .thenByDescending { it.id },
+                )
+                .take(limit)
         }
-        return hits.sortedByDescending { it.capturedAt }
+        scopePackages == null ->
+            dao.getFrameSearchProjectionAfter(at, id, limit)
+        scopePackages.size == 1 ->
+            dao.getFrameSearchProjectionForPackageAfter(
+                scopePackages.first(), at, id, limit,
+            )
+        else -> {
+            val merged = ArrayList<com.liuji.xiaoqi.data.db.FrameSearchPageRow>()
+            for (chunk in scopePackages.toList().chunked(200)) {
+                merged += dao.getFrameSearchProjectionForPackagesAfter(
+                    chunk, at, id, limit,
+                )
+            }
+            merged
+                .sortedWith(
+                    compareBy<com.liuji.xiaoqi.data.db.FrameSearchPageRow> { it.capturedAt }
+                        .thenBy { it.id },
+                )
+                .take(limit)
+        }
     }
 
     /** 支持 `123` / `#123` / `id:123`（忽略大小写与空白） */
@@ -975,6 +1331,8 @@ class UsageRepository(private val context: Context) {
         private const val TIMELINE_MERGE_GAP_MILLIS = 60_000L
         /** 单批行数；过大可能撑爆 CursorWindow，失败时会自动减半 */
         private const val EXPORT_FRAME_BATCH_MAX = 200
+        const val FRAME_SEARCH_PAGE_SIZE = 50
+        private const val LEGACY_SCAN_BATCH = 200
     }
 }
 

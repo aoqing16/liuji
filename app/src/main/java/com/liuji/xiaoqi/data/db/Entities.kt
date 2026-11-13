@@ -86,6 +86,14 @@ data class FrameTextExportRow(
     @ColumnInfo(name = "texts_json") val textsJson: String,
 )
 
+/** 帧搜索分页投影，不是表实体 */
+data class FrameSearchPageRow(
+    val id: Long,
+    @ColumnInfo(name = "package_name") val packageName: String,
+    @ColumnInfo(name = "captured_at") val capturedAt: Long,
+    @ColumnInfo(name = "texts_json") val textsJson: String,
+)
+
 /** 画面记录黑名单；user_exempt=true 表示用户已移除，自动/特征库不再加回 */
 @Entity(tableName = "frame_blacklist")
 data class FrameBlacklistEntity(

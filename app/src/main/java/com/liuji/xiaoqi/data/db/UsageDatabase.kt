@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import com.liuji.xiaoqi.data.frame.FrameFtsIndexer
+import io.requery.android.database.sqlite.RequerySQLiteOpenHelperFactory
 
 @Database(
     entities = [
@@ -33,6 +35,7 @@ abstract class UsageDatabase : RoomDatabase() {
                     UsageDatabase::class.java,
                     "liuji_usage.db",
                 )
+                    .openHelperFactory(RequerySQLiteOpenHelperFactory())
                     .addMigrations(
                         MIGRATION_2_3,
                         MIGRATION_3_4,
@@ -41,9 +44,11 @@ abstract class UsageDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                     )
-                    .fallbackToDestructiveMigration(dropAllTables = true)
                     .build()
-                    .also { instance = it }
+                    .also { db ->
+                        instance = db
+                        FrameFtsIndexer.get(context).ensureStarted()
+                    }
             }
         }
     }

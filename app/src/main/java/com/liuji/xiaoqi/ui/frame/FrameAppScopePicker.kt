@@ -66,9 +66,14 @@ fun FrameAppScopePicker(
     iconLoader: (String) -> Drawable?,
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
+    singleSelect: Boolean = false,
 ) {
     var query by remember { mutableStateOf("") }
-    var selected by remember(initialSelected) { mutableStateOf(initialSelected) }
+    var selected by remember(initialSelected, singleSelect) {
+        mutableStateOf(
+            if (singleSelect) initialSelected.take(1).toSet() else initialSelected,
+        )
+    }
     var expanded by remember { mutableStateOf(setOf<String>()) }
     val q = query.trim()
     val visible = remember(categories, q) {
@@ -112,17 +117,19 @@ fun FrameAppScopePicker(
                     Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回", tint = TextStrong)
                 }
                 Text(
-                    "选择应用",
+                    if (singleSelect) "选择单个应用" else "选择应用",
                     color = TextStrong,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f),
                 )
-                TextButton(
-                    onClick = { onConfirm(selected) },
-                    enabled = selected.isNotEmpty(),
-                ) {
-                    Text("确定", color = if (selected.isEmpty()) TextMuted else Accent)
+                if (!singleSelect) {
+                    TextButton(
+                        onClick = { onConfirm(selected) },
+                        enabled = selected.isNotEmpty(),
+                    ) {
+                        Text("确定", color = if (selected.isEmpty()) TextMuted else Accent)
+                    }
                 }
             }
             OutlinedTextField(
@@ -135,7 +142,11 @@ fun FrameAppScopePicker(
                 placeholder = { Text("搜索应用", color = TextMuted) },
             )
             Text(
-                text = if (selected.isEmpty()) "可勾选整个分类，或展开后多选应用" else "已选 ${selected.size} 个应用",
+                text = when {
+                    singleSelect -> "展开分类后点选应用即可"
+                    selected.isEmpty() -> "可勾选整个分类，或展开后多选应用"
+                    else -> "已选 ${selected.size} 个应用"
+                },
                 color = TextMuted,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(vertical = Space.sm),
@@ -177,16 +188,18 @@ fun FrameAppScopePicker(
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
-                                    TriStateCheckbox(
-                                        state = state,
-                                        onClick = {
-                                            selected = if (pickedInGroup == allIds.size && allIds.isNotEmpty()) {
-                                                selected - allIds.toSet()
-                                            } else {
-                                                selected + allIds
-                                            }
-                                        },
-                                    )
+                                    if (!singleSelect) {
+                                        TriStateCheckbox(
+                                            state = state,
+                                            onClick = {
+                                                selected = if (pickedInGroup == allIds.size && allIds.isNotEmpty()) {
+                                                    selected - allIds.toSet()
+                                                } else {
+                                                    selected + allIds
+                                                }
+                                            },
+                                        )
+                                    }
                                     Box(
                                         Modifier
                                             .size(8.dp)
@@ -209,11 +222,13 @@ fun FrameAppScopePicker(
                                                 }
                                             },
                                     )
-                                    Text(
-                                        "$pickedInGroup/${allIds.size}",
-                                        color = TextMuted,
-                                        fontSize = 12.sp,
-                                    )
+                                    if (!singleSelect) {
+                                        Text(
+                                            "$pickedInGroup/${allIds.size}",
+                                            color = TextMuted,
+                                            fontSize = 12.sp,
+                                        )
+                                    }
                                     IconButton(onClick = {
                                         expanded = if (group.category.id in expanded) {
                                             expanded - group.category.id
@@ -255,10 +270,14 @@ fun FrameAppScopePicker(
                                                         RoundedCornerShape(10.dp),
                                                     )
                                                     .clickable {
-                                                        selected = if (picked) {
-                                                            selected - app.packageName
+                                                        if (singleSelect) {
+                                                            onConfirm(setOf(app.packageName))
                                                         } else {
-                                                            selected + app.packageName
+                                                            selected = if (picked) {
+                                                                selected - app.packageName
+                                                            } else {
+                                                                selected + app.packageName
+                                                            }
                                                         }
                                                     }
                                                     .padding(horizontal = Space.sm),

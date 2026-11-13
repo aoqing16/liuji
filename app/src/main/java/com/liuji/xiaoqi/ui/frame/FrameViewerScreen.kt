@@ -85,6 +85,7 @@ import com.liuji.xiaoqi.data.frame.FrameJson
 import com.liuji.xiaoqi.data.frame.FrameSearchHit
 import com.liuji.xiaoqi.data.frame.FrameTextNode
 import com.liuji.xiaoqi.data.frame.UiFrameSnapshot
+import com.liuji.xiaoqi.ui.FrameSearchDateMode
 import com.liuji.xiaoqi.ui.FrameSearchScope
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import com.liuji.xiaoqi.ui.theme.Accent
@@ -142,7 +143,16 @@ fun FrameViewerScreen(
     searchHits: List<FrameSearchHit>,
     searchHitIndex: Int,
     searchLoading: Boolean,
+    searchLoadingMore: Boolean = false,
+    searchHasMore: Boolean = false,
+    searchTotal: Int? = null,
     searchMessage: String?,
+    searchIndexProgress: String? = null,
+    searchSortDescending: Boolean = true,
+    searchDateMode: FrameSearchDateMode = FrameSearchDateMode.ALL,
+    searchSingleEpochDay: Long = 0L,
+    searchRangeStartEpochDay: Long = 0L,
+    searchRangeEndEpochDay: Long = 0L,
     onBack: () -> Unit,
     onIndexChange: (Int) -> Unit,
     onSearchQueryChange: (String) -> Unit,
@@ -152,16 +162,23 @@ fun FrameViewerScreen(
     onRemoveSearchKeyword: (Int) -> Unit,
     onSearchMatchAllChange: (Boolean) -> Unit,
     onSearchScopeChange: (FrameSearchScope) -> Unit,
+    onPickSearchSinglePackage: (String) -> Unit,
     onPickSearchPackages: (Set<String>) -> Unit,
     onLoadSearchCategories: () -> Unit,
+    onPrepareSearch: () -> Unit,
     onSearchStrictChange: (Boolean) -> Unit,
     onRunSearch: () -> Unit,
     onJumpToSearchHit: (Int) -> Unit,
     onSearchPrev: () -> Unit,
     onSearchNext: () -> Unit,
     onRestoreSearchOrigin: () -> Boolean,
-    onLoadDateFrames: (Long, Int, Int) -> Unit,
-    onReloadPeriodFrames: () -> Unit,
+    onToggleSearchSort: () -> Unit,
+    onLoadMoreSearchPreview: () -> Unit,
+    onSearchDateModeChange: (FrameSearchDateMode) -> Unit,
+    onSearchSingleDayChange: (Long) -> Unit,
+    onSearchDateRangeChange: (Long, Long) -> Unit,
+    onLoadDateFrames: (Long, Int, Int) -> Unit = { _, _, _ -> },
+    onReloadPeriodFrames: () -> Unit = {},
     iconLoader: (String) -> android.graphics.drawable.Drawable?,
 ) {
     val copyText = rememberCopyAction()
@@ -207,7 +224,30 @@ fun FrameViewerScreen(
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showAppPicker by remember { mutableStateOf(false) }
+    var appPickerSingle by remember { mutableStateOf(false) }
     var viewMode by rememberSaveable { mutableStateOf(FrameViewMode.CANVAS) }
+    val singleSearchLabel = remember(
+        searchScope,
+        searchPackages,
+        appLabel,
+        packageName,
+        searchCategories,
+    ) {
+        if (searchScope != FrameSearchScope.CURRENT) {
+            null
+        } else {
+            val pkg = searchPackages.firstOrNull() ?: packageName.takeIf { it.isNotBlank() }
+            when {
+                pkg == null -> null
+                pkg == packageName && appLabel.isNotBlank() -> appLabel
+                else -> searchCategories.asSequence()
+                    .flatMap { it.apps.asSequence() }
+                    .firstOrNull { it.packageName == pkg }
+                    ?.label
+                    ?: pkg
+            }
+        }
+    }
     var nonChatMode by rememberSaveable { mutableStateOf(FrameViewMode.CANVAS) }
     LaunchedEffect(isChatGpt) {
         if (!isChatGpt && viewMode == FrameViewMode.CHAT) {
@@ -236,45 +276,50 @@ fun FrameViewerScreen(
             keywords = searchKeywords,
             matchAll = searchMatchAll,
             searchScope = searchScope,
-            pickedCount = searchPackages.size,
+            singlePackageLabel = singleSearchLabel,
+            pickedCount = if (searchScope == FrameSearchScope.PICKED) searchPackages.size else 0,
             strict = searchStrict,
             hits = searchHits,
             hitIndex = searchHitIndex,
             loading = searchLoading,
+            loadingMore = searchLoadingMore,
+            hasMore = searchHasMore,
+            total = searchTotal,
             message = searchMessage,
-            filterEpochDay = filterEpochDay,
-            filterStartMinute = filterStartMinute,
-            filterEndMinute = filterEndMinute,
+            indexProgress = searchIndexProgress,
+            sortDescending = searchSortDescending,
+            dateMode = searchDateMode,
+            singleEpochDay = searchSingleEpochDay,
+            rangeStartEpochDay = searchRangeStartEpochDay,
+            rangeEndEpochDay = searchRangeEndEpochDay,
             onQueryChange = onSearchQueryChange,
             onMultiChange = onSearchMultiChange,
             onKeywordChange = onSearchKeywordChange,
             onAddKeyword = onAddSearchKeyword,
             onRemoveKeyword = onRemoveSearchKeyword,
             onMatchAllChange = onSearchMatchAllChange,
-            onScopeCurrent = { onSearchScopeChange(FrameSearchScope.CURRENT) },
-            onScopeAll = { onSearchScopeChange(FrameSearchScope.ALL) },
-            onOpenAppPicker = {
+            onOpenSinglePicker = {
                 onLoadSearchCategories()
+                appPickerSingle = true
+                showAppPicker = true
+            },
+            onScopeAll = { onSearchScopeChange(FrameSearchScope.ALL) },
+            onOpenMultiPicker = {
+                onLoadSearchCategories()
+                appPickerSingle = false
                 showAppPicker = true
             },
             onStrictChange = onSearchStrictChange,
+            onDateModeChange = onSearchDateModeChange,
+            onSingleDayChange = onSearchSingleDayChange,
+            onDateRangeChange = onSearchDateRangeChange,
+            onToggleSort = onToggleSearchSort,
             onSearch = onRunSearch,
-            onApplyDateFilter = { day, startMinute, endMinute ->
-                filterEpochDay = day
-                filterStartMinute = startMinute
-                filterEndMinute = endMinute
-                onLoadDateFrames(day, startMinute, endMinute)
-            },
-            onClearDateFilter = {
-                filterEpochDay = -1L
-                filterStartMinute = 0
-                filterEndMinute = FULL_DAY_END_MINUTE
-                onReloadPeriodFrames()
-            },
             onJump = { i ->
                 onJumpToSearchHit(i)
                 showSearchDialog = false
             },
+            onLoadMoreNearEnd = onLoadMoreSearchPreview,
             onDismiss = { showSearchDialog = false },
         )
     }
@@ -283,11 +328,20 @@ fun FrameViewerScreen(
         FrameAppScopePicker(
             categories = searchCategories,
             loading = searchCategoriesLoading,
-            initialSelected = searchPackages,
+            initialSelected = if (appPickerSingle) {
+                searchPackages.take(1).toSet()
+            } else {
+                searchPackages
+            },
             iconLoader = iconLoader,
+            singleSelect = appPickerSingle,
             onDismiss = { showAppPicker = false },
             onConfirm = { packages ->
-                if (packages.isNotEmpty()) onPickSearchPackages(packages)
+                if (appPickerSingle) {
+                    packages.firstOrNull()?.let(onPickSearchSinglePackage)
+                } else if (packages.isNotEmpty()) {
+                    onPickSearchPackages(packages)
+                }
                 showAppPicker = false
             },
         )
@@ -397,7 +451,10 @@ fun FrameViewerScreen(
                     )
                 }
             }
-            IconButton(onClick = { showSearchDialog = true }) {
+            IconButton(onClick = {
+                onPrepareSearch()
+                showSearchDialog = true
+            }) {
                 Icon(Icons.Outlined.Search, contentDescription = "搜索画面", tint = Accent)
             }
         }
@@ -420,14 +477,18 @@ fun FrameViewerScreen(
                     )
                 }
                 Text(
-                    text = "结果 ${searchHitIndex + 1} / ${searchHits.size}",
+                    text = buildString {
+                        append("结果 ${searchHitIndex + 1} / 共 ")
+                        append(searchTotal?.toString() ?: "计算中")
+                        if (searchLoadingMore) append(" …")
+                    },
                     color = Accent,
                     fontSize = 12.sp,
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
                     onClick = onSearchNext,
-                    enabled = searchHitIndex < searchHits.lastIndex,
+                    enabled = searchHitIndex < searchHits.lastIndex || searchTotal?.let { it > searchHits.size } == true,
                 ) {
                     Icon(
                         Icons.Outlined.ChevronRight,
@@ -883,341 +944,6 @@ private fun buildDocumentLines(
         .sortedWith(compareBy({ it.node.top }, { it.node.left }))
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-private fun FrameSearchDialog(
-    query: String,
-    multi: Boolean,
-    keywords: List<String>,
-    matchAll: Boolean,
-    searchScope: FrameSearchScope,
-    pickedCount: Int,
-    strict: Boolean,
-    hits: List<FrameSearchHit>,
-    hitIndex: Int,
-    loading: Boolean,
-    message: String?,
-    filterEpochDay: Long,
-    filterStartMinute: Int,
-    filterEndMinute: Int,
-    onQueryChange: (String) -> Unit,
-    onMultiChange: (Boolean) -> Unit,
-    onKeywordChange: (Int, String) -> Unit,
-    onAddKeyword: () -> Unit,
-    onRemoveKeyword: (Int) -> Unit,
-    onMatchAllChange: (Boolean) -> Unit,
-    onScopeCurrent: () -> Unit,
-    onScopeAll: () -> Unit,
-    onOpenAppPicker: () -> Unit,
-    onStrictChange: (Boolean) -> Unit,
-    onSearch: () -> Unit,
-    onApplyDateFilter: (Long, Int, Int) -> Unit,
-    onClearDateFilter: () -> Unit,
-    onJump: (Int) -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val dateFmt = remember { DateTimeFormatter.ofPattern("yyyy-MM-dd") }
-    var draftDate by remember(filterEpochDay) {
-        mutableStateOf(
-            if (filterEpochDay >= 0L) LocalDate.ofEpochDay(filterEpochDay) else LocalDate.now(),
-        )
-    }
-    var minuteRange by remember(filterEpochDay, filterStartMinute, filterEndMinute) {
-        val start = if (filterEpochDay >= 0L) filterStartMinute else 0
-        val end = if (filterEpochDay >= 0L) filterEndMinute else FULL_DAY_END_MINUTE
-        mutableStateOf(start.toFloat()..end.coerceAtLeast(start).toFloat())
-    }
-    var pickingDate by remember { mutableStateOf(false) }
-    var showDateFilter by remember { mutableStateOf(false) }
-    val startMinute = minuteRange.start.toInt().coerceIn(0, FULL_DAY_END_MINUTE)
-    val endMinute = minuteRange.endInclusive.toInt().coerceIn(startMinute, FULL_DAY_END_MINUTE)
-    val hitBringIntoView = remember { BringIntoViewRequester() }
-    LaunchedEffect(hitIndex, hits.size) {
-        if (hitIndex in hits.indices) {
-            hitBringIntoView.bringIntoView()
-        }
-    }
-    val fieldColors = OutlinedTextFieldDefaults.colors(
-        focusedTextColor = TextStrong,
-        unfocusedTextColor = TextStrong,
-        focusedContainerColor = SurfaceMuted,
-        unfocusedContainerColor = SurfaceMuted,
-        cursorColor = Accent,
-        focusedBorderColor = Accent,
-        unfocusedBorderColor = TextMuted.copy(alpha = 0.4f),
-        focusedLabelColor = TextMuted,
-        unfocusedLabelColor = TextMuted,
-        focusedPlaceholderColor = TextMuted,
-        unfocusedPlaceholderColor = TextMuted,
-    )
-    val keywordRows = if (keywords.isEmpty()) listOf("") else keywords
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = CardBackground,
-        titleContentColor = TextStrong,
-        textContentColor = TextStrong,
-        title = { Text("搜索画面", color = TextStrong) },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(Space.sm),
-            ) {
-                Text("关键词", color = TextMuted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    FilterChip(
-                        selected = !multi,
-                        onClick = { onMultiChange(false) },
-                        label = { Text("单个") },
-                    )
-                    FilterChip(
-                        selected = multi,
-                        onClick = { onMultiChange(true) },
-                        label = { Text("多个") },
-                    )
-                }
-                if (!multi) {
-                    OutlinedTextField(
-                        value = query,
-                        onValueChange = onQueryChange,
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text("关键词或记录编号") },
-                        placeholder = { Text("例如：微信 / 123") },
-                        colors = fieldColors,
-                    )
-                } else {
-                    keywordRows.forEachIndexed { index, value ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            OutlinedTextField(
-                                value = value,
-                                onValueChange = { onKeywordChange(index, it) },
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                label = { Text("关键词 ${index + 1}") },
-                                placeholder = { Text("输入关键词") },
-                                colors = fieldColors,
-                            )
-                            if (keywordRows.size > 1) {
-                                IconButton(onClick = { onRemoveKeyword(index) }) {
-                                    Icon(
-                                        Icons.Outlined.Close,
-                                        contentDescription = "删除关键词",
-                                        tint = TextMuted,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    TextButton(onClick = onAddKeyword) {
-                        Text("添加关键词", color = Accent)
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                        FilterChip(
-                            selected = !matchAll,
-                            onClick = { onMatchAllChange(false) },
-                            label = { Text("或") },
-                        )
-                        FilterChip(
-                            selected = matchAll,
-                            onClick = { onMatchAllChange(true) },
-                            label = { Text("且") },
-                        )
-                    }
-                }
-                Text("范围", color = TextMuted, fontSize = 12.sp)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(Space.sm),
-                    verticalArrangement = Arrangement.spacedBy(Space.sm),
-                ) {
-                    FilterChip(
-                        selected = searchScope == FrameSearchScope.CURRENT,
-                        onClick = onScopeCurrent,
-                        label = { Text("仅当前应用") },
-                    )
-                    FilterChip(
-                        selected = searchScope == FrameSearchScope.PICKED,
-                        onClick = onOpenAppPicker,
-                        label = {
-                            Text(if (pickedCount > 0) "多个应用 · $pickedCount" else "多个应用")
-                        },
-                    )
-                    FilterChip(
-                        selected = searchScope == FrameSearchScope.ALL,
-                        onClick = onScopeAll,
-                        label = { Text("全部应用") },
-                    )
-                }
-                Text("匹配方式", color = TextMuted, fontSize = 12.sp)
-                Row(horizontalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    FilterChip(
-                        selected = !strict,
-                        onClick = { onStrictChange(false) },
-                        label = { Text("模糊") },
-                    )
-                    FilterChip(
-                        selected = strict,
-                        onClick = { onStrictChange(true) },
-                        label = { Text("精确") },
-                    )
-                }
-                TextButton(onClick = { showDateFilter = true }) {
-                    Text(
-                        text = if (filterEpochDay >= 0L) {
-                            "日期筛选 · ${LocalDate.ofEpochDay(filterEpochDay).format(dateFmt)} " +
-                                "${formatMinute(filterStartMinute)}–${formatMinute(filterEndMinute)}"
-                        } else {
-                            "日期筛选"
-                        },
-                        color = Accent,
-                    )
-                }
-                if (loading) {
-                    Text("搜索中…", color = TextMuted, fontSize = 13.sp)
-                }
-                message?.let {
-                    Text(it, color = TextMuted, fontSize = 13.sp)
-                }
-                if (hits.isNotEmpty()) {
-                    Text(
-                        "共 ${hits.size} 条，点选跳转",
-                        color = TextStrong,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    hits.forEachIndexed { i, hit ->
-                        val selected = i == hitIndex
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .then(
-                                    if (selected) {
-                                        Modifier.bringIntoViewRequester(hitBringIntoView)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
-                                .clip(RoundedCornerShape(Radius.sm))
-                                .background(if (selected) AccentSoft else Color.Transparent)
-                                .clickable { onJump(i) }
-                                .padding(horizontal = Space.sm, vertical = Space.sm),
-                        ) {
-                            Text(
-                                text = buildString {
-                                    append(timeFmt.format(Instant.ofEpochMilli(hit.capturedAt)))
-                                    if (searchScope != FrameSearchScope.CURRENT) {
-                                        append(" · ")
-                                        append(hit.appLabel.ifBlank { hit.packageName })
-                                    }
-                                },
-                                color = Accent,
-                                fontSize = 12.sp,
-                            )
-                            Text(
-                                text = hit.snippet,
-                                color = TextStrong,
-                                fontSize = 13.sp,
-                                maxLines = 2,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onSearch, enabled = !loading) {
-                Text(if (loading) "搜索中" else "搜索")
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
-            }
-        },
-    )
-    if (showDateFilter) {
-        AlertDialog(
-            onDismissRequest = { showDateFilter = false },
-            containerColor = CardBackground,
-            titleContentColor = TextStrong,
-            textContentColor = TextStrong,
-            title = { Text("日期筛选", color = TextStrong) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(Space.sm)) {
-                    Text(
-                        "只选一天。滑块贴在两端表示该日全部时间。",
-                        color = TextMuted,
-                        fontSize = 12.sp,
-                    )
-                    TextButton(onClick = { pickingDate = true }) {
-                        Text("日期 ${draftDate.format(dateFmt)}", color = TextStrong)
-                    }
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(formatMinute(startMinute), color = Accent, fontSize = 13.sp)
-                        Text(formatMinute(endMinute), color = Accent, fontSize = 13.sp)
-                    }
-                    RangeSlider(
-                        value = minuteRange,
-                        onValueChange = { next ->
-                            val start = next.start.toInt().coerceIn(0, FULL_DAY_END_MINUTE)
-                            val end = next.endInclusive.toInt().coerceIn(start, FULL_DAY_END_MINUTE)
-                            minuteRange = start.toFloat()..end.toFloat()
-                        },
-                        valueRange = 0f..FULL_DAY_END_MINUTE.toFloat(),
-                        colors = SliderDefaults.colors(
-                            thumbColor = Accent,
-                            activeTrackColor = Accent,
-                            inactiveTrackColor = AccentSoft,
-                        ),
-                    )
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    onApplyDateFilter(draftDate.toEpochDay(), startMinute, endMinute)
-                    showDateFilter = false
-                    onDismiss()
-                }) {
-                    Text("确定", color = Accent)
-                }
-            },
-            dismissButton = {
-                Row {
-                    TextButton(
-                        onClick = {
-                            onClearDateFilter()
-                            showDateFilter = false
-                            onDismiss()
-                        },
-                        enabled = filterEpochDay >= 0L,
-                    ) {
-                        Text("清除", color = TextMuted)
-                    }
-                    TextButton(onClick = { showDateFilter = false }) {
-                        Text("取消", color = TextMuted)
-                    }
-                }
-            },
-        )
-    }
-    if (pickingDate) {
-        FrameDatePickerDialog(
-            initial = draftDate,
-            onDismiss = { pickingDate = false },
-            onConfirm = { picked ->
-                draftDate = picked
-                pickingDate = false
-            },
-        )
-    }
-}
-
 private fun fieldMatches(field: String, terms: List<String>, strict: Boolean): Boolean {
     if (field.isBlank() || terms.isEmpty()) return false
     return terms.any { term ->
@@ -1335,10 +1061,6 @@ private fun rememberCopyAction(): (String) -> Unit {
     }
 }
 
-private fun formatMinute(minute: Int): String {
-    val value = minute.coerceIn(0, FULL_DAY_END_MINUTE)
-    return "%02d:%02d".format(value / 60, value % 60)
-}
 
 private enum class ChatRole { USER, AI, OTHER }
 
@@ -1463,33 +1185,4 @@ private fun ChatTranscriptView(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun FrameDatePickerDialog(
-    initial: LocalDate,
-    onDismiss: () -> Unit,
-    onConfirm: (LocalDate) -> Unit,
-) {
-    val today = LocalDate.now()
-    val initialMillis = initial.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-    val maxMillis = today.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-    val state = rememberDatePickerState(
-        initialSelectedDateMillis = initialMillis,
-        selectableDates = object : SelectableDates {
-            override fun isSelectableDate(utcTimeMillis: Long): Boolean = utcTimeMillis <= maxMillis
-        },
-    )
-    DatePickerDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                val millis = state.selectedDateMillis ?: return@TextButton
-                onConfirm(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate())
-            }) { Text("确定") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    ) {
-        DatePicker(state = state)
-    }
-}
 

@@ -587,6 +587,22 @@ class ImaApiClient(
         private val RETRY_BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L)
         private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
+        /** 腾讯 ima 文档约定：ima_kb_ + 恰好 8 位字母数字 */
+        private val KB_ID_FORMAT = Regex("^ima_kb_[A-Za-z0-9]{8}$")
+
+        fun isValidKnowledgeBaseId(id: String): Boolean =
+            KB_ID_FORMAT.matches(id.trim())
+
+        fun isInvalidKnowledgeBaseIdHint(hint: String): Boolean {
+            val h = hint.lowercase()
+            if (h.isBlank()) return false
+            return h.contains("knowledge_base_id") ||
+                h.contains("outdated knowledge") ||
+                (h.contains("ima_kb_") && (h.contains("invalid") || h.contains("outdated") || h.contains("format"))) ||
+                (h.contains("knowledge") && h.contains("base") &&
+                    (h.contains("invalid") || h.contains("outdated") || h.contains("不存在") || h.contains("无效")))
+        }
+
         fun isNoteMissingHint(hint: String): Boolean {
             val h = hint.lowercase()
             return h.contains("404") ||
@@ -597,7 +613,8 @@ class ImaApiClient(
                 h.contains("找不到") ||
                 h.contains("无权限") ||
                 h.contains("110030") ||
-                (h.contains("invalid") && (h.contains("doc") || h.contains("note") || h.contains("id")))
+                (h.contains("invalid") && (h.contains("doc") || h.contains("note") || h.contains("id")) &&
+                    !isInvalidKnowledgeBaseIdHint(hint))
         }
 
         fun isRateLimitHint(hint: String): Boolean {

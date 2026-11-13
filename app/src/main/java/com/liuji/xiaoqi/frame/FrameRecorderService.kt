@@ -18,6 +18,7 @@ import com.liuji.xiaoqi.MainActivity
 import com.liuji.xiaoqi.R
 import com.liuji.xiaoqi.data.db.UiFrameEntity
 import com.liuji.xiaoqi.data.db.UsageDatabase
+import com.liuji.xiaoqi.data.frame.FrameFtsIndexer
 import com.liuji.xiaoqi.data.frame.FrameInterval
 import com.liuji.xiaoqi.data.frame.FrameJson
 import kotlinx.coroutines.CoroutineScope
@@ -181,7 +182,7 @@ class FrameRecorderService : Service() {
             }
             lastTextHashByPkg[pkg] = hash
 
-            dao.insertFrame(
+            FrameFtsIndexer.get(applicationContext).insertFrameIndexed(
                 UiFrameEntity(
                     capturedAt = snap.capturedAt,
                     packageName = pkg,

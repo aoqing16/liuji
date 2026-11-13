@@ -1,18 +1,21 @@
 package com.liuji.xiaoqi.ui.util
 
-import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.awaitHorizontalPointerSlopOrCancellation
+import androidx.compose.foundation.gestures.horizontalDrag
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.composed
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 
 /**
  * 横向滑动切换日/周/月。
- * 使用 [detectHorizontalDragGestures]，在确认横向手势前不抢占纵向列表滚动。
+ *
+ * 使用 [awaitHorizontalPointerSlopOrCancellation]：仅在越过 touchSlop 且方向为横向时接管，
+ * 纵向滑动交给 LazyColumn / 下拉刷新，可安全挂在整页列表上。
  */
 fun Modifier.horizontalPeriodSwipe(
     enabled: Boolean = true,
@@ -22,28 +25,43 @@ fun Modifier.horizontalPeriodSwipe(
 ): Modifier {
     if (!enabled) return this
     return composed {
-        var acc by remember { mutableFloatStateOf(0f) }
         val left by rememberUpdatedState(onSwipeLeft)
         val right by rememberUpdatedState(onSwipeRight)
         pointerInput(thresholdPx) {
-            detectHorizontalDragGestures(
-                onDragStart = { acc = 0f },
-                onDragEnd = {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                var total = 0f
+                val slopChange = awaitHorizontalPointerSlopOrCancellation(
+                    down.id,
+                    down.type,
+                ) { change, overSlop ->
+                    change.consume()
+                    total = overSlop
+                } ?: return@awaitEachGesture
+
+                var triggered = false
+                fun maybeTrigger() {
+                    if (triggered) return
                     when {
-                        acc <= -thresholdPx -> left()
-                        acc >= thresholdPx -> right()
+                        total <= -thresholdPx -> {
+                            triggered = true
+                            left()
+                        }
+                        total >= thresholdPx -> {
+                            triggered = true
+                            right()
+                        }
                     }
-                    acc = 0f
-                },
-                onDragCancel = { acc = 0f },
-                onHorizontalDrag = { change, dragAmount ->
-                    acc += dragAmount
-                    // 超过阈值后再消费，减少与纵向滚动的指针竞争
-                    if (kotlin.math.abs(acc) >= thresholdPx * 0.35f) {
-                        change.consume()
-                    }
-                },
-            )
+                }
+                maybeTrigger()
+                if (triggered) return@awaitEachGesture
+
+                horizontalDrag(slopChange.id) { change ->
+                    total += change.positionChange().x
+                    change.consume()
+                    maybeTrigger()
+                }
+            }
         }
     }
 }

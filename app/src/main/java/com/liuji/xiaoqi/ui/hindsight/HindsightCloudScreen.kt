@@ -61,11 +61,15 @@ import com.liuji.xiaoqi.data.AppUsageItem
 import com.liuji.xiaoqi.data.PeriodSummary
 import com.liuji.xiaoqi.data.StatsPeriod
 import com.liuji.xiaoqi.ui.UsageUiState
+import com.liuji.xiaoqi.ui.components.AppListSkeleton
 import com.liuji.xiaoqi.ui.components.AppRankedList
 import com.liuji.xiaoqi.ui.components.CategoryLegend
+import com.liuji.xiaoqi.ui.components.CategoryListSkeleton
 import com.liuji.xiaoqi.ui.components.CategoryRankedList
+import com.liuji.xiaoqi.ui.components.ChartSkeleton
 import com.liuji.xiaoqi.ui.components.HourlyChart
 import com.liuji.xiaoqi.ui.components.PeriodBarChart
+import com.liuji.xiaoqi.ui.dashboard.DashboardCard
 import com.liuji.xiaoqi.ui.dashboard.PeriodDatePickerDialog
 import com.liuji.xiaoqi.ui.dashboard.filterAppsByQuery
 import com.liuji.xiaoqi.ui.dashboard.periodAnchorDate
@@ -202,14 +206,14 @@ fun HindsightCloudScreen(
                 }
 
                 if (state.loading && state.summary == null) {
-                    item(key = "hs-loading") {
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(120.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
+                    item(key = "hs-apps-skeleton") {
+                        DashboardCard(title = "最常用应用") {
+                            AppListSkeleton(rows = 8)
+                        }
+                    }
+                    item(key = "hs-cats-skeleton") {
+                        DashboardCard(title = "最常用分类") {
+                            CategoryListSkeleton(rows = 5)
                         }
                     }
                 }
@@ -500,14 +504,7 @@ private fun HindsightPeriodCard(
         Column(Modifier.padding(14.dp)) {
             when {
                 summary == null && state.loading -> {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(180.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(color = Accent, strokeWidth = 2.dp)
-                    }
+                    ChartSkeleton(period = state.period)
                 }
                 summary == null -> EmptyHint()
                 state.period == StatsPeriod.DAY -> {

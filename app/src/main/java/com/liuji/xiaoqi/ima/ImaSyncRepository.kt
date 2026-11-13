@@ -50,10 +50,11 @@ class ImaSyncRepository(context: Context) {
             return ImaSyncReport(false, msg)
         }
         val client = ImaApiClient(cfg.clientId, cfg.apiKey)
-        val kbId = ensureKbId(client, cfg) ?: run {
+        var kbId = ensureKbId(client, cfg) ?: run {
             val msg = prefs.loadConfig().lastError.ifBlank { "无法准备知识库" }
             return ImaSyncReport(false, msg)
         }
+        var kbRefreshed = false
 
         runCatching {
             usageRepo.syncFromSystem(untilMillis = System.currentTimeMillis())
@@ -86,9 +87,40 @@ class ImaSyncRepository(context: Context) {
                 uploaded++
                 AppLog.i(TAG, "uploaded $date mediaTail=${mediaId.takeLast(12)}")
             } catch (e: Exception) {
+                val hint = e.message.orEmpty()
                 AppLog.w(TAG, "sync day $date", e)
-                errors += "$date: ${e.message ?: e}"
-                if (ImaApiClient.isRateLimitHint(e.message.orEmpty())) {
+                if (!kbRefreshed && ImaApiClient.isInvalidKnowledgeBaseIdHint(hint)) {
+                    AppLog.w(TAG, "stale knowledge_base_id; re-resolve by name")
+                    val fresh = refreshKbId(client, cfg.knowledgeBaseName, previousId = kbId)
+                    if (fresh != null) {
+                        kbId = fresh
+                        kbRefreshed = true
+                        try {
+                            if (uploaded > 0) Thread.sleep(DAY_GAP_MS)
+                            val mediaId = uploadOneDay(client, kbId, date)
+                            prefs.putDayState(
+                                dateKey,
+                                ImaDaySyncState(
+                                    mediaId = mediaId,
+                                    fileSyncedAt = System.currentTimeMillis(),
+                                ),
+                            )
+                            uploaded++
+                            AppLog.i(TAG, "uploaded $date after kb refresh mediaTail=${mediaId.takeLast(12)}")
+                            continue
+                        } catch (retry: Exception) {
+                            AppLog.w(TAG, "sync day $date after kb refresh", retry)
+                            errors += "$date: ${retry.message ?: retry}"
+                            if (ImaApiClient.isRateLimitHint(retry.message.orEmpty())) {
+                                errors += "请求频率受限，请稍后再试"
+                                break
+                            }
+                            continue
+                        }
+                    }
+                }
+                errors += "$date: ${hint.ifBlank { e.toString() }}"
+                if (ImaApiClient.isRateLimitHint(hint)) {
                     errors += "请求频率受限，请稍后再试"
                     break
                 }
@@ -117,13 +149,40 @@ class ImaSyncRepository(context: Context) {
 
     private fun ensureKbId(client: ImaApiClient, cfg: ImaSyncConfig): String? {
         val cached = cfg.knowledgeBaseId.trim()
-        if (cached.isNotBlank()) {
-            // 名称变更后缓存会清空；有缓存则仍校验一次名称列表是否含该 id 成本高，直接信任
+        if (cached.isNotBlank() && ImaApiClient.isValidKnowledgeBaseId(cached)) {
+            // 名称变更后缓存会清空；格式合法则先信任，失败时再 refreshKbId
             return cached
         }
-        val (res, id) = client.ensureKnowledgeBase(cfg.knowledgeBaseName)
+        if (cached.isNotBlank()) {
+            AppLog.w(TAG, "cached kb id rejected by format: ${cached.take(24)}")
+            prefs.setKnowledgeBaseId("")
+        }
+        return resolveAndStoreKbId(client, cfg.knowledgeBaseName)
+    }
+
+    /** 清空缓存后按名称重新解析；ID 变化时清日状态，避免指向旧库的「已同步」跳过。 */
+    private fun refreshKbId(
+        client: ImaApiClient,
+        knowledgeBaseName: String,
+        previousId: String,
+    ): String? {
+        prefs.setKnowledgeBaseId("")
+        val id = resolveAndStoreKbId(client, knowledgeBaseName) ?: return null
+        if (id != previousId) {
+            AppLog.i(TAG, "kb id changed; clear day sync states")
+            prefs.clearAllDayStates()
+        }
+        return id
+    }
+
+    private fun resolveAndStoreKbId(client: ImaApiClient, knowledgeBaseName: String): String? {
+        val (res, id) = client.ensureKnowledgeBase(knowledgeBaseName)
         if (!res.ok || id.isNullOrBlank()) {
             prefs.setLastError(res.error ?: res.errmsg ?: "无法创建或找到知识库")
+            return null
+        }
+        if (!ImaApiClient.isValidKnowledgeBaseId(id)) {
+            prefs.setLastError("知识库 ID 格式异常：$id")
             return null
         }
         prefs.setKnowledgeBaseId(id)

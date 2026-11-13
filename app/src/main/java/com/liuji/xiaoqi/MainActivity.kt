@@ -34,6 +34,7 @@ import com.liuji.xiaoqi.ui.categories.DeleteCategoryConfirmDialog
 import com.liuji.xiaoqi.ui.category.CategoryUsageDetailScreen
 import com.liuji.xiaoqi.ui.dashboard.DashboardScreen
 import com.liuji.xiaoqi.ui.dashboard.PermissionScreen
+import com.liuji.xiaoqi.ui.frame.FrameBrowseScreen
 import com.liuji.xiaoqi.ui.frame.FrameViewerScreen
 import com.liuji.xiaoqi.ui.hindsight.HindsightAppDetailScreen
 import com.liuji.xiaoqi.ui.hindsight.HindsightCloudScreen
@@ -168,53 +169,6 @@ class MainActivity : ComponentActivity() {
                         RuntimeLogScreen(onBack = viewModel::openSettings)
                     }
 
-                    state.screen == AppScreen.SETTINGS -> {
-                        SettingsScreen(
-                            themeMode = state.themeMode,
-                            onThemeModeChange = viewModel::setThemeMode,
-                            frameEnabled = state.frameRecordingEnabled,
-                            frameInterval = state.frameInterval,
-                            accessibilityEnabled = state.accessibilityEnabled,
-                            accessibilityLegacyListed = state.accessibilityLegacyListed,
-                            frameCount = state.frameCount,
-                            webDavAccount = state.webDavAccount,
-                            hindsightConfigured = state.hindsightConfigured,
-                            hindsightLastSync = state.hindsightLastSync,
-                            cloudSyncing = state.cloudSyncing,
-                            onBack = viewModel::openDashboard,
-                            onToggleFrame = viewModel::setFrameRecordingEnabled,
-                            onIntervalChange = viewModel::setFrameInterval,
-                            onOpenAccessibility = {
-                                startActivity(viewModel.openAccessibilitySettings())
-                            },
-                            onSaveWebDav = viewModel::saveWebDavAccount,
-                            onSyncCloud = viewModel::syncHindsightCloud,
-                            onOpenRuntimeLog = viewModel::openRuntimeLog,
-                            frameBlacklist = state.frameBlacklist,
-                            frameBlacklistPending = state.frameBlacklistPending,
-                            frameBlacklistCandidates = state.frameBlacklistCandidates,
-                            frameBlacklistSearch = state.frameBlacklistSearch,
-                            frameBlacklistPickerOpen = state.frameBlacklistPickerOpen,
-                            onOpenBlacklistPicker = viewModel::openFrameBlacklistPicker,
-                            onDismissBlacklistPicker = viewModel::dismissFrameBlacklistPicker,
-                            onBlacklistSearchChange = viewModel::setFrameBlacklistSearch,
-                            onAddBlacklist = viewModel::addToFrameBlacklist,
-                            onRemoveBlacklist = viewModel::removeFromFrameBlacklist,
-                            onConfirmBlacklistPending = viewModel::confirmFrameBlacklistPending,
-                            onDismissBlacklistPending = viewModel::dismissFrameBlacklistPending,
-                            privacyApps = state.privacyApps,
-                            privacyAppCandidates = state.privacyAppCandidates,
-                            privacyAppSearch = state.privacyAppSearch,
-                            privacyAppPickerOpen = state.privacyAppPickerOpen,
-                            onOpenPrivacyAppPicker = viewModel::openPrivacyAppPicker,
-                            onDismissPrivacyAppPicker = viewModel::dismissPrivacyAppPicker,
-                            onPrivacyAppSearchChange = viewModel::setPrivacyAppSearch,
-                            onAddPrivacyApps = viewModel::addPrivacyApps,
-                            onRemovePrivacyApp = viewModel::removePrivacyApp,
-                            iconLoader = viewModel::appIcon,
-                        )
-                    }
-
                     state.screen == AppScreen.FRAME_VIEWER -> {
                         FrameViewerScreen(
                             appLabel = state.frameAppLabel,
@@ -234,7 +188,16 @@ class MainActivity : ComponentActivity() {
                             searchHits = state.frameSearchHits,
                             searchHitIndex = state.frameSearchHitIndex,
                             searchLoading = state.frameSearchLoading,
+                            searchLoadingMore = state.frameSearchLoadingMore,
+                            searchHasMore = state.frameSearchHasMore,
+                            searchTotal = state.frameSearchTotal,
                             searchMessage = state.frameSearchMessage,
+                            searchIndexProgress = state.frameFtsProgress.message,
+                            searchSortDescending = state.frameSearchSortDescending,
+                            searchDateMode = state.frameSearchDateMode,
+                            searchSingleEpochDay = state.frameSearchSingleEpochDay,
+                            searchRangeStartEpochDay = state.frameSearchRangeStartEpochDay,
+                            searchRangeEndEpochDay = state.frameSearchRangeEndEpochDay,
                             onBack = viewModel::openDashboard,
                             onIndexChange = viewModel::setFrameIndex,
                             onSearchQueryChange = viewModel::setFrameSearchQuery,
@@ -244,17 +207,52 @@ class MainActivity : ComponentActivity() {
                             onRemoveSearchKeyword = viewModel::removeFrameSearchKeyword,
                             onSearchMatchAllChange = viewModel::setFrameSearchMatchAll,
                             onSearchScopeChange = viewModel::setFrameSearchScope,
+                            onPickSearchSinglePackage = viewModel::setFrameSearchSinglePackage,
                             onPickSearchPackages = viewModel::setFrameSearchPackages,
                             onLoadSearchCategories = viewModel::loadFrameSearchCategories,
+                            onPrepareSearch = viewModel::openFrameSearchFromViewer,
                             onSearchStrictChange = viewModel::setFrameSearchStrict,
                             onRunSearch = viewModel::runFrameSearch,
                             onJumpToSearchHit = viewModel::jumpToFrameSearchHit,
                             onSearchPrev = viewModel::frameSearchPrev,
                             onSearchNext = viewModel::frameSearchNext,
                             onRestoreSearchOrigin = viewModel::restoreFrameSearchOrigin,
+                            onToggleSearchSort = viewModel::toggleFrameSearchSort,
+                            onLoadMoreSearchPreview = viewModel::loadMoreFromSearchPreview,
+                            onSearchDateModeChange = viewModel::setFrameSearchDateMode,
+                            onSearchSingleDayChange = viewModel::setFrameSearchSingleDay,
+                            onSearchDateRangeChange = viewModel::setFrameSearchDateRange,
                             onLoadDateFrames = viewModel::applyFrameDateFilter,
                             onReloadPeriodFrames = viewModel::clearFrameDateFilter,
                             iconLoader = viewModel::appIcon,
+                        )
+                    }
+
+                    state.screen == AppScreen.HINDSIGHT_APP_DETAIL -> {
+                        HindsightAppDetailScreen(
+                            detail = state.hindsightAppDetail,
+                            loading = state.hindsightAppDetailLoading,
+                            iconLoader = viewModel::hindsightAppIcon,
+                            onClose = viewModel::closeHindsightAppDetail,
+                        )
+                    }
+
+                    // 无权限 / 云看板下的设置：全屏（仍可由返回切回）
+                    state.phoneBottomTab == PhoneBottomTab.SETTINGS &&
+                        (
+                            state.dataSource != DataSource.PHONE ||
+                                !state.hasPermission
+                            ) -> {
+                        AppSettingsContent(
+                            state = state,
+                            viewModel = viewModel,
+                            showBack = true,
+                            onBack = {
+                                viewModel.selectPhoneBottomTab(PhoneBottomTab.DASHBOARD)
+                            },
+                            onOpenAccessibility = {
+                                startActivity(viewModel.openAccessibilitySettings())
+                            },
                         )
                     }
 
@@ -268,15 +266,6 @@ class MainActivity : ComponentActivity() {
                             onUseCloudBoard = {
                                 viewModel.setDataSource(DataSource.HINDSIGHT_CLOUD)
                             },
-                        )
-                    }
-
-                    state.screen == AppScreen.HINDSIGHT_APP_DETAIL -> {
-                        HindsightAppDetailScreen(
-                            detail = state.hindsightAppDetail,
-                            loading = state.hindsightAppDetailLoading,
-                            iconLoader = viewModel::hindsightAppIcon,
-                            onClose = viewModel::closeHindsightAppDetail,
                         )
                     }
 
@@ -322,6 +311,56 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                                 else -> when (state.phoneBottomTab) {
+                                    PhoneBottomTab.FRAMES -> {
+                                        FrameBrowseScreen(
+                                            loading = state.frameBrowseLoading,
+                                            categories = state.frameBrowseCategories,
+                                            searchQuery = state.frameSearchQuery,
+                                            searchMulti = state.frameSearchMulti,
+                                            searchKeywords = state.frameSearchKeywords,
+                                            searchMatchAll = state.frameSearchMatchAll,
+                                            searchScope = state.frameSearchScope,
+                                            searchPackages = state.frameSearchPackages,
+                                            searchCategories = state.frameSearchCategories,
+                                            searchCategoriesLoading = state.frameSearchCategoriesLoading,
+                                            searchStrict = state.frameSearchStrict,
+                                            searchHits = state.frameSearchHits,
+                                            searchHitIndex = state.frameSearchHitIndex,
+                                            searchLoading = state.frameSearchLoading,
+                                            searchLoadingMore = state.frameSearchLoadingMore,
+                                            searchHasMore = state.frameSearchHasMore,
+                                            searchTotal = state.frameSearchTotal,
+                                            searchMessage = state.frameSearchMessage,
+                                            indexProgress = state.frameFtsProgress.message,
+                                            searchSortDescending = state.frameSearchSortDescending,
+                                            searchDateMode = state.frameSearchDateMode,
+                                            searchSingleEpochDay = state.frameSearchSingleEpochDay,
+                                            searchRangeStartEpochDay = state.frameSearchRangeStartEpochDay,
+                                            searchRangeEndEpochDay = state.frameSearchRangeEndEpochDay,
+                                            onOpenSearch = viewModel::openFrameSearchFromBrowse,
+                                            onSearchQueryChange = viewModel::setFrameSearchQuery,
+                                            onSearchMultiChange = viewModel::setFrameSearchMulti,
+                                            onSearchKeywordChange = viewModel::updateFrameSearchKeyword,
+                                            onAddSearchKeyword = viewModel::addFrameSearchKeyword,
+                                            onRemoveSearchKeyword = viewModel::removeFrameSearchKeyword,
+                                            onSearchMatchAllChange = viewModel::setFrameSearchMatchAll,
+                                            onSearchScopeChange = viewModel::setFrameSearchScope,
+                                            onPickSearchSinglePackage = viewModel::setFrameSearchSinglePackage,
+                                            onPickSearchPackages = viewModel::setFrameSearchPackages,
+                                            onLoadSearchCategories = viewModel::loadFrameSearchCategories,
+                                            onSearchStrictChange = viewModel::setFrameSearchStrict,
+                                            onRunSearch = viewModel::runFrameSearch,
+                                            onToggleSort = viewModel::toggleFrameSearchSort,
+                                            onJumpToHit = viewModel::jumpToFrameSearchHit,
+                                            onLoadMoreNearEnd = viewModel::loadMoreFromSearchPreview,
+                                            onSearchDateModeChange = viewModel::setFrameSearchDateMode,
+                                            onSearchSingleDayChange = viewModel::setFrameSearchSingleDay,
+                                            onSearchDateRangeChange = viewModel::setFrameSearchDateRange,
+                                            onAppClick = viewModel::openAppFramesLast7Days,
+                                            onOpenSettings = viewModel::openSettings,
+                                            iconLoader = viewModel::appIcon,
+                                        )
+                                    }
                                     PhoneBottomTab.CATEGORIES -> {
                                         CategoriesScreen(
                                             loading = state.categoriesUi.loading,
@@ -342,7 +381,24 @@ class MainActivity : ComponentActivity() {
                                     PhoneBottomTab.CLOUD_SYNC -> {
                                         CloudSyncScreen()
                                     }
-                                    else -> {
+                                    PhoneBottomTab.SETTINGS -> {
+                                        AppSettingsContent(
+                                            state = state,
+                                            viewModel = viewModel,
+                                            showBack = false,
+                                            onBack = {
+                                                viewModel.selectPhoneBottomTab(
+                                                    PhoneBottomTab.DASHBOARD,
+                                                )
+                                            },
+                                            onOpenAccessibility = {
+                                                startActivity(
+                                                    viewModel.openAccessibilitySettings(),
+                                                )
+                                            },
+                                        )
+                                    }
+                                    PhoneBottomTab.DASHBOARD -> {
                                         DashboardScreen(
                                             state = state,
                                             onPeriodChange = viewModel::setPeriod,
@@ -359,7 +415,6 @@ class MainActivity : ComponentActivity() {
                                             },
                                             onExportDateRange = viewModel::exportDateRange,
                                             onMessageShown = viewModel::consumeMessage,
-                                            onOpenSettings = viewModel::openSettings,
                                             onDayViewMode = viewModel::setDayViewMode,
                                             onTimelineGranularity = viewModel::setTimelineGranularity,
                                             onTimelineBucketClick = viewModel::drillIntoTimelineBucket,
@@ -382,6 +437,59 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+}
+
+@androidx.compose.runtime.Composable
+private fun AppSettingsContent(
+    state: UsageUiState,
+    viewModel: UsageViewModel,
+    showBack: Boolean,
+    onBack: () -> Unit,
+    onOpenAccessibility: () -> Unit,
+) {
+    SettingsScreen(
+        themeMode = state.themeMode,
+        onThemeModeChange = viewModel::setThemeMode,
+        frameEnabled = state.frameRecordingEnabled,
+        frameInterval = state.frameInterval,
+        accessibilityEnabled = state.accessibilityEnabled,
+        accessibilityLegacyListed = state.accessibilityLegacyListed,
+        frameCount = state.frameCount,
+        webDavAccount = state.webDavAccount,
+        hindsightConfigured = state.hindsightConfigured,
+        hindsightLastSync = state.hindsightLastSync,
+        cloudSyncing = state.cloudSyncing,
+        onBack = onBack,
+        showBack = showBack,
+        onToggleFrame = viewModel::setFrameRecordingEnabled,
+        onIntervalChange = viewModel::setFrameInterval,
+        onOpenAccessibility = onOpenAccessibility,
+        onSaveWebDav = viewModel::saveWebDavAccount,
+        onSyncCloud = viewModel::syncHindsightCloud,
+        onOpenRuntimeLog = viewModel::openRuntimeLog,
+        frameBlacklist = state.frameBlacklist,
+        frameBlacklistPending = state.frameBlacklistPending,
+        frameBlacklistCandidates = state.frameBlacklistCandidates,
+        frameBlacklistSearch = state.frameBlacklistSearch,
+        frameBlacklistPickerOpen = state.frameBlacklistPickerOpen,
+        onOpenBlacklistPicker = viewModel::openFrameBlacklistPicker,
+        onDismissBlacklistPicker = viewModel::dismissFrameBlacklistPicker,
+        onBlacklistSearchChange = viewModel::setFrameBlacklistSearch,
+        onAddBlacklist = viewModel::addToFrameBlacklist,
+        onRemoveBlacklist = viewModel::removeFromFrameBlacklist,
+        onConfirmBlacklistPending = viewModel::confirmFrameBlacklistPending,
+        onDismissBlacklistPending = viewModel::dismissFrameBlacklistPending,
+        privacyApps = state.privacyApps,
+        privacyAppCandidates = state.privacyAppCandidates,
+        privacyAppSearch = state.privacyAppSearch,
+        privacyAppPickerOpen = state.privacyAppPickerOpen,
+        onOpenPrivacyAppPicker = viewModel::openPrivacyAppPicker,
+        onDismissPrivacyAppPicker = viewModel::dismissPrivacyAppPicker,
+        onPrivacyAppSearchChange = viewModel::setPrivacyAppSearch,
+        onAddPrivacyApps = viewModel::addPrivacyApps,
+        onRemovePrivacyApp = viewModel::removePrivacyApp,
+        iconLoader = viewModel::appIcon,
+    )
 }
 
 @androidx.compose.runtime.Composable

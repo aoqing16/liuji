@@ -82,6 +82,7 @@ fun SettingsScreen(
     hindsightLastSync: String?,
     cloudSyncing: Boolean,
     onBack: () -> Unit,
+    showBack: Boolean = true,
     onToggleFrame: (Boolean) -> Unit,
     onIntervalChange: (FrameInterval) -> Unit,
     onOpenAccessibility: () -> Unit,
@@ -129,15 +130,17 @@ fun SettingsScreen(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.size(40.dp),
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
-                    contentDescription = "返回",
-                    tint = TextStrong,
-                )
+            if (showBack) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.size(40.dp),
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.ArrowBack,
+                        contentDescription = "返回",
+                        tint = TextStrong,
+                    )
+                }
             }
             Text(
                 text = "设置",
@@ -351,8 +354,11 @@ fun SettingsScreen(
                 fontSize = 12.sp,
                 modifier = Modifier.padding(top = Space.sm),
             )
+        }
 
-            Spacer(Modifier.height(Space.md))
+        Spacer(Modifier.height(Space.md))
+
+        SettingsCard(title = "画面黑名单") {
             Text("黑名单", color = TextStrong, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             Text(
                 "名单内应用不会记录画面。持续几乎无文本约 2 分钟会进入待确认，确认后才不记录。特征匹配仍会直接加入。可手动增删。移除后不再自动加回。",
